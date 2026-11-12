@@ -1,0 +1,69 @@
+# Public datasheets used as the RAG knowledge base.
+#
+# The PDFs themselves are NOT committed (they are copyrighted by their vendors).
+# Run `uv run python -m part_assistant.download` to fetch them into data/raw/.
+# sha256 pins the exact revision: if a vendor updates a file, the download
+# fails loudly instead of silently changing eval answers.
+
+[[source]]
+file = "ae-csu1600at.pdf"
+vendor = "Advanced Energy"
+model = "CSU1600AT"
+url = "https://www.advancedenergy.com/getmedia/df02f0bf-d6eb-43f7-9dfe-965f09bb66a1/TRN-AC-DC-CSU1600AT-Series-Release-1-0-(111624).pdf"
+sha256 = "699a918549edaef38b8a3a6b27ad3b0dd5599b0338f3a2a36004d8a771f36bfb"
+
+[[source]]
+file = "ae-csu2400at.pdf"
+vendor = "Advanced Energy"
+model = "CSU2400AT"
+url = "https://www.advancedenergy.com/getmedia/70b7e9c6-b4d6-449d-a988-1de39026251e/ENG-MCRPS-2400W-SERIES-10-30-24.pdf"
+sha256 = "908b9d333f74121fa48bbeb4522ad97eadf4c0479fc767b9cd590b026af925ec"
+
+[[source]]
+file = "bel-tec1600.pdf"
+vendor = "Bel Power Solutions"
+model = "TEC1600-12-074xA"
+url = "https://www.belfuse.com/media/datasheets/products/power-supplies/ds-BPS-TEC1600-ac-dc-series.pdf"
+sha256 = "279457e9a1f556aa8c35094dbedd9443bd086af508d0d348063b6dc87125de01"
+
+[[source]]
+file = "bel-pes1600.pdf"
+vendor = "Bel Power Solutions"
+model = "PES1600"
+url = "https://www.belfuse.com/media/datasheets/products/power-supplies/ds-bps-pes-1600-series.pdf"
+sha256 = "b8abfa4dcc6f4389263a6adba188fc49ca63a58fa3b1300ba6da366951aa5567"
+
+[[source]]
+file = "bel-tec3200-54.pdf"
+vendor = "Bel Power Solutions"
+model = "TEC3200-54-074xA"
+url = "https://www.belfuse.com/media/datasheets/products/power-supplies/ds-BPS-TEC3200-54-074xA-series.pdf"
+sha256 = "54feaad32a98044d4aa395eeac246c258190a3b982896e7d3996dc8ee1c07fae"
+
+[[source]]
+file = "mornsun-lms800-p12b.pdf"
+vendor = "Mornsun"
+model = "LMS800-P12B"
+url = "https://www.mornsun-power.com/public/uploads/pdf/LMS800-P12B.pdf"
+sha256 = "3b1dece7e1c671e38c0cbf656f9287b6729e816c33fde868126779df2dbb82c3"
+
+[[source]]
+file = "mornsun-lms1600-p12b.pdf"
+vendor = "Mornsun"
+model = "LMS1600-P12B"
+url = "https://www.mornsun-power.com/public/uploads/pdf/LMS1600-P12B.pdf"
+sha256 = "cb53a5dd519b1a741ce7d99caad1bbf4d95a1a52647c9c975cdf67fc5b5879f0"
+
+[[source]]
+file = "mornsun-lms2000-p12b.pdf"
+vendor = "Mornsun"
+model = "LMS2000-P12B"
+url = "https://www.mornsun-power.com/public/uploads/pdf/LMS2000-P12B.pdf"
+sha256 = "c2997cd41864bb2745fc5b9015d76444694ba61c3fe06e780839fd82cff3dbe5"
+
+[[source]]
+file = "mornsun-lms2700-t12b.pdf"
+vendor = "Mornsun"
+model = "LMS2700-T12B"
+url = "https://www.mornsun-power.com/public/uploads/pdf/LMS2700-T12B.pdf"
+sha256 = "a64475ac2c194868b896f85a72d1f322ebe12314766fb93e54a3898ba32eb114"

@@ -30,3 +30,7 @@ traces/
 # --- Personal notes (local only, not for the public repo) ---
 docs/
 CLAUDE.md
+
+# --- Vendor datasheets: copyrighted, fetched by part_assistant.download ---
+data/raw/*
+!data/raw/.gitkeep
