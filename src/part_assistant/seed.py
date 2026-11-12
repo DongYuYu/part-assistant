@@ -38,6 +38,15 @@ PARTS = [
     ("CAP-22UF-450V", "22uF 450V bulk capacitor", "capacitor", "22uF, 450V, 105C", "active"),
 ]
 
+# Internal part -> public datasheet model, only where the specs really match
+# (power, output voltage, 80 PLUS grade). Others stay NULL on purpose: the agent
+# must say "no datasheet on file" instead of guessing.
+VENDOR_MPN = {
+    "PSU-0800-12V": "LMS800-P12B",  # Mornsun, 800 W 12 V Platinum
+    "PSU-1600-12V": "TEC1600-12-074NA",  # Bel, 1600 W 12 V Titanium
+    "PSU-3200-54V": "TEC3200-54-074NA",  # Bel, 3200 W 54 V Titanium
+}
+
 # A few parts are intentionally out of stock everywhere -> good eval cases.
 OUT_OF_STOCK = {"PSU-0800-12V", "CAP-1000UF-63V"}
 
@@ -57,8 +66,8 @@ def seed(conn: sqlite3.Connection, rng_seed: int = 42) -> None:
     with conn:  # one transaction: all rows commit together, or none do
         conn.executemany(
             "INSERT INTO parts (part_no, name, category, spec, vendor_mpn, lifecycle)"
-            " VALUES (?, ?, ?, ?, NULL, ?)",
-            PARTS,
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            [(pn, name, cat, spec, VENDOR_MPN.get(pn), lc) for pn, name, cat, spec, lc in PARTS],
         )
         for part_no, *_ in PARTS:
             for wh in WAREHOUSES:
