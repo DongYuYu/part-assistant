@@ -1,0 +1,33 @@
+[project]
+name = "part-assistant"
+version = "0.1.0"
+description = "Factory knowledge Q&A and work-order agent (RAG + tool use + MCP) — interview portfolio project"
+readme = "README.md"
+authors = [
+    { name = "Dong Yu Yu" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+part-assistant = "part_assistant:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+]
