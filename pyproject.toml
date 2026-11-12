@@ -7,7 +7,10 @@ authors = [
     { name = "Dong Yu Yu" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pymupdf>=2.1",
+    "pymupdf4llm>=2.1",
+]
 
 [project.scripts]
 part-assistant = "part_assistant:main"
