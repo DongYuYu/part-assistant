@@ -226,6 +226,24 @@ must_include = [["1000 W", "1000W", "1,000"]]
 sources = [{ file = "bel-tec1600.pdf", page = 3 }]
 why = "Stated in a table cell and repeated in footnote 6."
 
+[[case]]
+id = "footnote-03"
+category = "footnote"
+question = "CSU2400AT 的均流誤差 ±4% 適用於什麼負載範圍？"
+expect = "answer"
+must_include = ["5%", "100%"]
+sources = [{ file = "ae-csu2400at.pdf", page = 2 }]
+why = "Footnote 2 is attached to the parameter name 'Current Sharing Error (CSE)', not a value."
+
+[[case]]
+id = "footnote-04"
+category = "footnote"
+question = "CSU2400AT 如果要用 cold redundancy，需要多少外部電容？"
+expect = "answer"
+must_include = [["2,000", "2000"]]
+sources = [{ file = "ae-csu2400at.pdf", page = 2 }]
+why = "Table shows 3,000 µF minimum; footnote 3 adds the 2,000 µF cold-redundancy rule."
+
 # --------------------------------------------------------- similar models
 
 [[case]]
@@ -365,6 +383,16 @@ expect = "refuse"
 tools = ["lookup_part"]
 why = "Part exists but has no datasheet on file; must not borrow LMS2000-P12B (12 V)."
 
+[[case]]
+id = "multi-04"
+category = "multi"
+question = "PSU-0800-12V 已經停產了，它的 datasheet 上寫的保固是幾年？"
+expect = "answer"
+must_include = [["5 年", "五年", "5 years", "5年"]]
+sources = [{ file = "mornsun-lms800-p12b.pdf", page = 1 }]
+tools = ["lookup_part", "search_docs"]
+why = "Part -> LMS800-P12B -> warranty. Lifecycle (EOL) must not stop the lookup."
+
 # ------------------------------------------------------------------ refusals
 
 [[case]]
@@ -429,6 +457,13 @@ expect = "clarify"
 must_not_include = ["741"]
 why = "Matches PSU-1600-12V and PSU-1600-54V; must not add them up (228 + 513)."
 
+[[case]]
+id = "clarify-03"
+category = "clarify"
+question = "TEC 系列電源的重量是多少？"
+expect = "clarify"
+why = "TEC1600 is 740 g, TEC3200 is TBD; must ask which model instead of picking one."
+
 # ------------------------------------------------------------------ tickets
 
 [[case]]
@@ -449,3 +484,12 @@ must_include = ["TK-"]
 tools = ["create_ticket"]
 tool_args = { part_no = "FAN-4028-HS", severity = "low" }
 why = "Low severity is created directly; answer must include the ticket id."
+
+[[case]]
+id = "ticket-03"
+category = "ticket"
+question = "幫我開一張中嚴重度工單，料號 PSU-9999-XX 在進料檢驗時外觀刮傷。"
+expect = "clarify"
+must_include = [["找不到", "查無", "不存在", "not found"]]
+tools = ["lookup_part"]
+why = "Part number does not exist; must not create a ticket against it."
