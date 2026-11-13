@@ -17,8 +17,11 @@ a search blocks the loop for ~0.5 s, fine for one user over stdio.
 stdout carries the protocol: never print() here (logs go to stderr).
 """
 
+import sqlite3
+import sys
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Annotated, Literal
 
 from mcp.server.mcpserver import Elicit, ElicitationResult, MCPServer, Resolve
@@ -101,10 +104,31 @@ def build_server(tools: Tools, load_retriever: Callable[[], Retriever] | None = 
     return mcp
 
 
+def check_setup(db_path: Path, chunks_path: Path) -> list[str]:
+    """What is missing before the server can work. A host only shows the user
+    'Error executing tool', so a missing file must be caught here, at startup, with the fix."""
+    problems = []
+    if not chunks_path.exists():
+        problems.append(f"{chunks_path} not found: run `uv run python -m part_assistant.download`"
+                        " then `uv run python -m part_assistant.chunk`")
+    has_parts = db_path.exists() and sqlite3.connect(db_path).execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='parts'").fetchone()
+    if not has_parts:
+        problems.append(f"{db_path} has no data: run `uv run python -m part_assistant.seed`")
+    return problems
+
+
 def main() -> None:
-    from part_assistant.chunk import load_chunks
-    from part_assistant.db import connect
+    from part_assistant.chunk import OUT_PATH, load_chunks
+    from part_assistant.db import DEFAULT_DB_PATH, connect
     from part_assistant.retrieve import Embedder, Reranker
+
+    problems = check_setup(DEFAULT_DB_PATH, OUT_PATH)
+    if problems:  # stderr: stdout belongs to the protocol
+        print(f"part-assistant MCP server cannot start (cwd {Path.cwd()}):", file=sys.stderr)
+        for line in problems:
+            print(f"  - {line}", file=sys.stderr)
+        sys.exit(1)
 
     def load_retriever() -> Retriever:
         return Retriever(load_chunks(), Embedder(), Reranker())

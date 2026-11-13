@@ -15,6 +15,7 @@
 - [架構](#架構)
 - [目前進度](#目前進度)
 - [快速開始](#快速開始)
+- [接到你的 MCP host](#接到你的-mcp-host)
 - [專案結構](#專案結構)
 - [資料](#資料)
 - [評測：黃金樣本](#評測黃金樣本)
@@ -163,13 +164,94 @@ uv run --env-file .env python -m part_assistant.eval_agent --max-usd 5   # 端�
 uv run python -m part_assistant.eval_agent --regrade runs/eval-....json  # 改了黃金樣本後重新批改，免費
 ```
 
-**當成 MCP server 用**（不需要 API key：模型由 Claude Code / Claude Desktop 提供）：
-
-- **Claude Code**：在專案資料夾啟動 `claude`，它會讀 `.mcp.json`，詢問是否啟用 `part-assistant`。輸入 `/mcp` 可以看到 4 個工具。
-- **其他資料夾或其他 MCP host**：`claude mcp add part-assistant -- uv run --directory /path/to/part-assistant python -m part_assistant.mcp_server`
-- 高嚴重度工單會在 host 裡**跳出表單**，要使用者填名字同意才會建立。
+**當成 MCP server 用**：請看下面的[接到你的 MCP host](#接到你的-mcp-host)。
 
 > 用到真實 PDF 的測試，第一次會比較慢（版面分析模型跑在 CPU 上）。沒有下載 PDF 時，這些測試會自動跳過。
+
+---
+
+## 接到你的 MCP host
+
+把 4 個工具（`search_docs`、`lookup_part`、`check_stock`、`create_ticket`）接到 Claude Code、Claude Desktop 或任何支援 MCP 的程式。**不需要 Anthropic API key**：模型由 host 提供，這個 server 只執行工具。
+
+### 1. 準備資料（只要做一次）
+
+```bash
+git clone https://github.com/DongYuYu/part-assistant.git
+cd part-assistant
+uv sync
+uv run python -m part_assistant.download   # 9 份公開 datasheet
+uv run python -m part_assistant.seed       # SQLite 假資料
+uv run python -m part_assistant.chunk      # 解析和切段（約 2 分鐘）
+pwd                                        # 記下這個絕對路徑，下面的設定會用到
+```
+
+- 第一次呼叫 `search_docs` 時，會下載 bge-m3 和 reranker 模型（約 4.5 GB），之後都從本機快取讀取。
+- **有 NVIDIA GPU 最好**：一次搜尋在 RTX 5070 Laptop 上約 0.5 秒；只用 CPU 時，reranker 一次約 20 秒。`lookup_part`、`check_stock`、`create_ticket` 只查 SQLite，沒有 GPU 也很快。
+- 下面的設定都用 `uv run --directory <路徑>`：uv 會先切換到專案資料夾再啟動，所以不管 host 從哪裡啟動 server，資料路徑都正確。
+
+### 2. 接到 host
+
+**Claude Code，在這個專案資料夾裡**：專案已附 `.mcp.json`。在專案資料夾執行 `claude`，同意啟用 `part-assistant`，再輸入 `/mcp` 確認 4 個工具都在。
+
+**Claude Code，在任何資料夾**（加到使用者層級的設定）：
+
+```bash
+claude mcp add --scope user part-assistant -- \
+  uv run --directory /absolute/path/to/part-assistant python -m part_assistant.mcp_server
+```
+
+**Claude Desktop**：編輯設定檔，然後**完全結束並重新開啟** Claude Desktop。
+
+- macOS：`~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows：`%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "part-assistant": {
+      "command": "uv",
+      "args": ["run", "--directory", "/absolute/path/to/part-assistant",
+               "python", "-m", "part_assistant.mcp_server"]
+    }
+  }
+}
+```
+
+- Claude Desktop 不一定讀得到你終端機的 `PATH`。如果出現找不到 `uv` 的錯誤，把 `"command"` 換成 uv 的絕對路徑（macOS / Linux 用 `which uv` 查，Windows 用 `where uv` 查）。
+- Windows 上的路徑要寫成 `C:\\Users\\you\\part-assistant`（JSON 裡的反斜線要寫兩次）。
+
+**其他 MCP host**：大多數 host 的設定格式都一樣，就是 `command` 加上 `args`。這個 server 使用 **stdio** 傳輸。
+
+**不接任何 host，只想試試工具**：用官方的 [MCP Inspector](https://github.com/modelcontextprotocol/inspector)（需要 Node.js），它會開一個網頁，可以直接呼叫每個工具：
+
+```bash
+npx @modelcontextprotocol/inspector \
+  uv run --directory /absolute/path/to/part-assistant python -m part_assistant.mcp_server
+```
+
+### 3. 試試看
+
+在 host 裡直接用中文或英文問：
+
+- 「PSU-1600-12V 還有多少庫存？」→ `check_stock`
+- 「料號 PSU-3200-54V 滿載時的 hold-up time 是多少？」→ `lookup_part`，再用原廠型號 `search_docs`
+- 「TEC3200 的保固是幾年？」→ 規格書沒寫，應該回答「沒有寫」
+- 「PSU-3200-54V 燒機冒煙，開一張高嚴重度工單」→ 見下面說明
+
+**高嚴重度工單**：server 會透過 MCP 的 elicitation 請 host **跳出表單**，要使用者填名字並同意才會建立。拒絕、取消、沒填名字，都不會建立工單。如果 host 不支援 elicitation，這個呼叫會失敗，**也不會建立工單**（fail closed）。低和中嚴重度會直接建立。
+
+### 常見問題
+
+| 狀況 | 原因和解法 |
+|---|---|
+| host 顯示 server 啟動失敗 | 在終端機手動執行上面的 `uv run --directory … python -m part_assistant.mcp_server`。資料沒準備好時，它會印出缺了什麼、要跑哪個指令，然後結束；正常的話它會停住等輸入（按 Ctrl+C 結束） |
+| 找不到 `uv` | host 讀不到你終端機的 `PATH`：設定裡的 `command` 改用 uv 的絕對路徑 |
+| 工具回傳 `Error executing tool …` | host 只顯示這一行；詳細原因在 server 的 stderr（Claude Desktop 的 MCP log，或用 `claude --debug` 啟動 Claude Code） |
+| 第一次搜尋很久 | 正在下載或載入模型；之後就會變快 |
+| 高嚴重度工單一直失敗 | 你的 host 不支援 elicitation（跳出表單）。設計上就是不讓工單在沒人確認時被建立 |
+
+> 所有料號、庫存和工單都是自己產生的**假資料**；datasheet 是廠商公開的 PDF，不包含在這個 repo 裡，由 `download` 從原廠網址下載。
 
 ---
 

@@ -147,3 +147,14 @@ async def test_retriever_loads_lazily_on_first_search(tools):
         await client.call_tool("search_docs", {"query": "x"})
         await client.call_tool("search_docs", {"query": "y"})
     assert loads == [1]
+
+
+def test_setup_check_names_the_command_to_run(tmp_path, tools):
+    from part_assistant.mcp_server import check_setup
+
+    problems = check_setup(tmp_path / "none.db", tmp_path / "none.jsonl")
+    assert any("part_assistant.chunk" in p for p in problems)
+    assert any("part_assistant.seed" in p for p in problems)
+    chunks = tmp_path / "c.jsonl"
+    chunks.write_text("")
+    assert check_setup(tmp_path / "t.db", chunks) == []  # the seeded fixture DB
