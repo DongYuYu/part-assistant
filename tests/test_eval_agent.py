@@ -127,3 +127,16 @@ def test_regrade_uses_the_current_golden_set_without_calling_the_api(tools):
     fixed = replace(CASES["multi-01"], sources=[SRC, {**SRC, "page": 3}])
     again = regrade([asdict(g)], [fixed])[0]
     assert again.passed, again.problems
+
+
+def test_markdown_report_lists_failures():
+    from part_assistant.eval_agent import Grade, markdown_report
+
+    bad = Grade(id="x-01", category="spec", expect="answer", passed=False,
+                problems=["missing one of ['9 ms']", "no tool call with args {'a': 'b|c'}"])
+    ok = Grade(id="x-02", category="spec", expect="answer", passed=True)
+    md = markdown_report(summarize([bad, ok]), [bad, ok])
+    assert "1/2 passed (50.0%)" in md and "| spec | 1/2 |" in md
+    row = next(line for line in md.splitlines() if line.startswith("| x-01 "))
+    assert row.count("|") == 3, "a '|' inside a problem must not add a table column"
+    assert "x-02" not in md  # passing cases are not listed

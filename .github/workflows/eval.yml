@@ -1,0 +1,119 @@
+# End-to-end eval: the real agent answers the golden set; fails below 95%.
+#
+# COSTS MONEY (~$1.4 per run, capped at $3), so it runs ONLY when a PR gets the
+# `run-eval` label. To run it again after new commits: remove the label, add it again.
+#
+# GitHub runners have no GPU: retrieval runs on CPU (~20 s per rerank), so a full
+# run takes ~30-40 min. Models and processed data are cached between runs.
+#
+# Security: `pull_request` (not `pull_request_target`), so PRs from forks never
+# get the secret; read-only token; the key lives only in the repository secret.
+name: Eval (paid)
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    if: github.event.label.name == 'run-eval'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_HOME: /home/runner/.cache/huggingface
+    steps:
+      - name: Check the API key secret is set
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Add ANTHROPIC_API_KEY under Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+
+      # torch + CUDA (~7 GB venv) + models (~4.5 GB) do not fit the default free disk.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.5"
+          python-version: "3.12"
+          enable-cache: false  # the torch + CUDA wheels would fill the 10 GB cache quota
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Restore models
+        id: models
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /home/runner/.cache/huggingface
+          key: hf-${{ hashFiles('src/part_assistant/retrieve.py') }}
+
+      - name: Restore processed data
+        id: data
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            data/raw
+            data/processed/parsed
+            data/processed/emb
+          key: data-${{ hashFiles('data/sources.toml', 'src/part_assistant/download.py', 'src/part_assistant/parse.py', 'src/part_assistant/chunk.py', 'src/part_assistant/retrieve.py') }}
+          restore-keys: data-  # an older cache still helps: parse/embedding caches are content-keyed
+
+      - name: Download datasheets and build chunks
+        run: |
+          uv run --no-sync python -m part_assistant.download
+          uv run --no-sync python -m part_assistant.chunk
+
+      - name: Load models and embed chunks (fills both caches)
+        run: |
+          uv run --no-sync python -c "
+          from part_assistant.chunk import load_chunks
+          from part_assistant.retrieve import Embedder, Reranker
+          e = Embedder(); e.embed_chunks(load_chunks()); Reranker()
+          print('embedded', e.n_embedded, 'new chunks')"
+
+      # Saved BEFORE the eval, so a failing score still keeps the caches for next time.
+      - name: Save models
+        if: steps.models.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /home/runner/.cache/huggingface
+          key: ${{ steps.models.outputs.cache-primary-key }}
+
+      - name: Save processed data
+        if: steps.data.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            data/raw
+            data/processed/parsed
+            data/processed/emb
+          key: ${{ steps.data.outputs.cache-primary-key }}
+
+      - name: Run the golden-set eval (fails below 95%)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # Also writes the result table to the run page (GITHUB_STEP_SUMMARY).
+        run: uv run --no-sync python -m part_assistant.eval_agent --max-usd 3 --threshold 0.95
+
+      - name: Upload eval result
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: eval-result
+          path: runs/
+          if-no-files-found: ignore

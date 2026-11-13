@@ -16,6 +16,7 @@ that also states the answer) --regrade re-grades the saved run with no API calls
 
 import argparse
 import json
+import os
 import re
 import sys
 import tempfile
@@ -30,7 +31,7 @@ from part_assistant.golden import Case, check_answer_text, load_cases
 from part_assistant.tools import Tools
 
 RUNS_DIR = Path("runs")
-DEFAULT_THRESHOLD = 0.90
+DEFAULT_THRESHOLD = 0.95  # same bar as the 95% go-live rule this project mirrors
 
 # Words that show the agent declined / said "not stated". A keyword grader is crude:
 # it is cheap and repeatable, but can be fooled. must_not_include does the real guarding.
@@ -182,6 +183,26 @@ def summarize(grades: list[Grade]) -> dict:
     }
 
 
+def markdown_report(summary: dict, grades: list[Grade]) -> str:
+    """The table shown on the GitHub Actions run page (GITHUB_STEP_SUMMARY)."""
+    lines = [
+        "## Golden-set eval",
+        f"**{summary['passed']}/{summary['scored']} passed ({summary['pass_rate']:.1%})**, "
+        f"${summary['cost_usd']:.2f}, {summary['seconds']:.0f} s"
+        + (f"; known issues not scored: {', '.join(summary['known_issues'])}"
+           if summary["known_issues"] else ""),
+        "",
+        "| category | passed |", "|---|---|",
+        *(f"| {c} | {r} |" for c, r in summary["by_category"].items()),
+    ]
+    failed = [g for g in grades if not g.passed]
+    if failed:
+        lines += ["", "| case | problems |", "|---|---|"]
+        lines += [f"| {g.id}{' (known issue)' if g.known_issue else ''} | "
+                  f"{'; '.join(g.problems).replace('|', '/')} |" for g in failed]
+    return "\n".join(lines) + "\n"
+
+
 def build_eval_agent(db_path: Path) -> Agent:
     """Real retriever + a FRESH seeded database (tickets from the eval stay out of the real DB)."""
     from part_assistant.chunk import load_chunks
@@ -235,6 +256,9 @@ def main() -> None:
                                "cases": [asdict(g) for g in grades]},
                               ensure_ascii=False, indent=2))
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if os.environ.get("GITHUB_STEP_SUMMARY"):  # set by GitHub Actions
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+            f.write(markdown_report(summary, grades))
     print(f"-> {out}")
     if summary["pass_rate"] < args.threshold:
         sys.exit(1)

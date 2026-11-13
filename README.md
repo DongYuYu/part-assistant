@@ -112,7 +112,7 @@ flowchart TB
 - ✅ Trace（每次模型和工具呼叫的耗時、token、快取、成本）、步數和預算上限
 - ✅ 端到端評測：黃金樣本 48/48（2 題已知問題不計分），50 題 $1.38
 - ✅ MCP server（官方 Python SDK 2.x），可接 Claude Code / Claude Desktop
-- ⬜ GitHub Actions：每個 PR 都跑評測，低於門檻就失敗
+- ✅ GitHub Actions：每次 push / PR 跑 lint 和測試；PR 加上 `run-eval` 標籤時跑端到端評測，低於 95% 就失敗
 - ⬜ 模型路由（Ollama ↔ Claude）
 - ⬜ Docker Compose 一鍵啟動
 
@@ -360,6 +360,17 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 - 第一次跑是 46/48。2 題失敗**都是閱卷標準錯**，不是 agent 錯（同義詞漏收「查不到」、`must_not_include` 擋到同一張表的另一個正確數值）。修正黃金樣本後用 `--regrade` 重新批改，沒有再呼叫 API。
 - 另外補了 6 題的頁碼：datasheet 常在第 1 頁簡介和後面的規格表各寫一次同一個數值。
 - **限制**：批改用關鍵字比對，便宜且可重現，但抓不到「多說了錯的內容」；48 題樣本小，一題約 2%。
+
+### CI（`.github/workflows/`）
+
+| workflow | 什麼時候跑 | 做什麼 | 花費 |
+|---|---|---|---|
+| `ci.yml` | 每次 push 到 main、每個 PR | ruff + pytest。不裝 torch 和 CUDA（638 MB，原本 7.1 GB），需要 PDF 或模型的測試自動跳過，約 1 分鐘 | 免費 |
+| `eval.yml` | PR 加上 **`run-eval`** 標籤時 | 下載 datasheet → 切段 → 真的 agent 回答 50 題，**通過率低於 95% 就失敗**；結果表格顯示在執行頁面，JSON 存成 artifact | 約 $1.4，上限 $3 |
+
+- 為什麼要加標籤才跑：每次評測都要花錢，改文件或 README 不需要跑。新的 commit 不會自動重跑，要移除標籤再加回去。
+- GitHub 的機器沒有 GPU，reranker 跑在 CPU 上，一次評測約 30–40 分鐘；模型和解析結果會快取。
+- API key 只放在 repo 的 Secrets（`ANTHROPIC_API_KEY`）。觸發用 `pull_request` 而不是 `pull_request_target`，所以從 fork 來的 PR 拿不到 key；第三方 action 都鎖定 commit SHA。
 
 ---
 

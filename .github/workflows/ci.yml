@@ -1,0 +1,47 @@
+# Free, fast checks on every push to main and every PR: lint + tests.
+#
+# No PDFs, no models, no API key: tests that need real data skip themselves.
+# The tools, agent loop (fake client), grader, MCP server, idempotency and
+# human-confirmation rules are all covered here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:  # a new push cancels the run for the previous commit
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.5"
+          python-version: "3.12"
+          enable-cache: true
+
+      # torch + CUDA libraries are ~6 GB and these tests never load a model:
+      # skip them (638 MB instead of 7.1 GB). The lockfile is still checked (--locked).
+      - name: Install dependencies (without torch / CUDA)
+        run: |
+          skip=""
+          for p in torch triton $(grep -o '^name = "nvidia-[^"]*"' uv.lock | cut -d'"' -f2); do
+            skip="$skip --no-install-package $p"
+          done
+          uv sync --locked $skip
+
+      - name: Lint
+        run: uv run --no-sync ruff check src tests
+
+      - name: Test
+        run: uv run --no-sync pytest -q
