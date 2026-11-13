@@ -106,12 +106,12 @@ flowchart TB
 - ✅ 黃金樣本 50 題，加上驗證測試
 - ✅ 切段（chunk），加上解析快取
 - ✅ 檢索：型號過濾 + bge-m3 向量 + reranker（比較過 BM25、hybrid 和 3 個 embedding 模型；r@5 = 1.00、MRR = 0.88）
-- 🚧 4 個工具和 agent 迴圈（程式和離線測試完成，還沒接上真的模型跑黃金樣本）
-- ⬜ 評測程式，跑出第一個分數
-- ⬜ MCP server
-- ⬜ `create_ticket` 的冪等和逾時重試測試
+- ✅ 4 個工具和 agent 迴圈（Claude API tool use；高嚴重度工單要人工確認）
+- ✅ `create_ticket` 的冪等和重試測試（idempotency key 由程式產生，模型無法指定）
+- ✅ Trace（每次模型和工具呼叫的耗時、token、快取、成本）、步數和預算上限
+- ✅ 端到端評測：黃金樣本 48/48（2 題已知問題不計分），50 題 $1.38
+- ✅ MCP server（官方 Python SDK 2.x），可接 Claude Code / Claude Desktop
 - ⬜ GitHub Actions：每個 PR 都跑評測，低於門檻就失敗
-- ⬜ Trace、步數和預算上限
 - ⬜ 模型路由（Ollama ↔ Claude）
 - ⬜ Docker Compose 一鍵啟動
 
@@ -137,7 +137,7 @@ flowchart TB
 
 ## 快速開始
 
-> 目前完成的是資料準備和評測資料。下面只列出**現在就能跑**的指令，其他功能完成後再補上。
+> 下面只列出**現在就能跑**的指令，其他功能完成後再補上。
 
 需要：Python 3.12、[uv](https://docs.astral.sh/uv/)
 
@@ -150,8 +150,24 @@ uv run python -m part_assistant.download  # 下載 9 份 datasheet 到 data/raw/
 uv run python -m part_assistant.seed      # 產生 SQLite 假資料到 data/processed/factory.db
 uv run python -m part_assistant.chunk     # 解析 PDF 並切段 → data/processed/chunks.jsonl（第一次約 2 分鐘）
 uv run python -m part_assistant.eval_retrieval  # 檢索評測（第一次會下載 bge-m3 和 reranker，約 4.5 GB）
-uv run pytest -q                          # 跑全部測試
+uv run pytest -q                          # 跑全部測試（不需要 API key，不花錢）
 ```
+
+**問 agent 問題**（需要 Claude API key，會花錢，一題約 $0.01–0.06）：
+
+```bash
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env      # .env 已在 .gitignore，不會被 commit
+uv run --env-file .env python -m part_assistant.agent "PSU-3200-54V 滿載時的 hold-up time 是多少？"
+uv run --env-file .env python -m part_assistant.agent --show "..."   # 印出每次 API 往返的內容
+uv run --env-file .env python -m part_assistant.eval_agent --max-usd 5   # 端到端評測 50 題
+uv run python -m part_assistant.eval_agent --regrade runs/eval-....json  # 改了黃金樣本後重新批改，免費
+```
+
+**當成 MCP server 用**（不需要 API key：模型由 Claude Code / Claude Desktop 提供）：
+
+- **Claude Code**：在專案資料夾啟動 `claude`，它會讀 `.mcp.json`，詢問是否啟用 `part-assistant`。輸入 `/mcp` 可以看到 4 個工具。
+- **其他資料夾或其他 MCP host**：`claude mcp add part-assistant -- uv run --directory /path/to/part-assistant python -m part_assistant.mcp_server`
+- 高嚴重度工單會在 host 裡**跳出表單**，要使用者填名字同意才會建立。
 
 > 用到真實 PDF 的測試，第一次會比較慢（版面分析模型跑在 CPU 上）。沒有下載 PDF 時，這些測試會自動跳過。
 
@@ -171,6 +187,8 @@ part-assistant/
 │   ├── eval_retrieval.py  # 用黃金樣本計算 recall@k 和 MRR
 │   ├── tools.py       # 4 個工具和 JSON schema；安全規則寫在程式裡
 │   ├── agent.py       # agent 迴圈：步數和成本上限、trace、高嚴重度要人工確認
+│   ├── eval_agent.py  # 端到端評測：真的 agent 回答黃金樣本，逐題批改
+│   ├── mcp_server.py  # 同一組工具包成 MCP server
 │   └── golden.py      # 讀取黃金樣本、比對答案
 ├── data/
 │   ├── sources.toml   # datasheet 清單：網址和 SHA-256（PDF 本身不進 git）
@@ -179,6 +197,7 @@ part-assistant/
 ├── design/          # 各元件的設計說明（例如 chunking.md）
 ├── eval/
 │   └── golden.toml    # 黃金樣本 50 題
+├── .mcp.json          # Claude Code 的 MCP 設定
 └── tests/             # pytest
 ```
 
@@ -249,6 +268,16 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 - **`why` 是必填欄位**：每一題都要說明它在測什麼。
 - **`known_issue` 標記目前已知會失敗的題目**：不為了分數好看就刪題。修好之後分數上升，就是修正有效的證據。
 - **黃金樣本本身也有測試**（`tests/test_golden.py`）：檢查 id 有沒有重複、檔名和頁碼是否存在、料號是否存在。黃金樣本出錯，分數就沒有意義。
+
+### 端到端結果（2026-11-13，claude-opus-5-5，檢索跑在 RTX 5070 Laptop）
+
+| 計分題數 | 通過 | 費用 | 時間 |
+|---|---|---|---|
+| 48（另 2 題已知問題） | 48 | $1.38 | 278 秒 |
+
+- 第一次跑是 46/48。2 題失敗**都是閱卷標準錯**，不是 agent 錯（同義詞漏收「查不到」、`must_not_include` 擋到同一張表的另一個正確數值）。修正黃金樣本後用 `--regrade` 重新批改，沒有再呼叫 API。
+- 另外補了 6 題的頁碼：datasheet 常在第 1 頁簡介和後面的規格表各寫一次同一個數值。
+- **限制**：批改用關鍵字比對，便宜且可重現，但抓不到「多說了錯的內容」；48 題樣本小，一題約 2%。
 
 ---
 
