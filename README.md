@@ -105,7 +105,7 @@ flowchart TB
 - ✅ PDF 解析和表格後處理（合併儲存格、註腳、跨頁表格）
 - ✅ 黃金樣本 50 題，加上驗證測試
 - ✅ 切段（chunk），加上解析快取
-- ⬜ Hybrid 檢索（BM25 + 多語向量）
+- ✅ 檢索：型號過濾 + bge-m3 向量 + reranker（比較過 BM25、hybrid 和 3 個 embedding 模型；r@5 = 1.00、MRR = 0.88）
 - ⬜ 4 個工具和 agent 迴圈
 - ⬜ 評測程式，跑出第一個分數
 - ⬜ MCP server
@@ -149,6 +149,7 @@ uv sync                                   # 安裝套件（版本鎖定在 uv.lo
 uv run python -m part_assistant.download  # 下載 9 份 datasheet 到 data/raw/，並驗證 SHA-256
 uv run python -m part_assistant.seed      # 產生 SQLite 假資料到 data/processed/factory.db
 uv run python -m part_assistant.chunk     # 解析 PDF 並切段 → data/processed/chunks.jsonl（第一次約 2 分鐘）
+uv run python -m part_assistant.eval_retrieval  # 檢索評測（第一次會下載 bge-m3 和 reranker，約 4.5 GB）
 uv run pytest -q                          # 跑全部測試
 ```
 
@@ -166,6 +167,8 @@ part-assistant/
 │   ├── download.py    # 照清單下載 datasheet，驗證 SHA-256
 │   ├── parse.py       # PDF → 文字和表格區塊，加上後處理和快取
 │   ├── chunk.py       # 區塊 → 檢索用的 chunk（附檔名、頁碼、章節）
+│   ├── retrieve.py    # 型號過濾、向量檢索、reranker（BM25 和 hybrid 可選）
+│   ├── eval_retrieval.py  # 用黃金樣本計算 recall@k 和 MRR
 │   └── golden.py      # 讀取黃金樣本、比對答案
 ├── data/
 │   ├── sources.toml   # datasheet 清單：網址和 SHA-256（PDF 本身不進 git）
@@ -280,6 +283,19 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 **用黃金樣本檢查上限**：`tests/test_chunk.py` 會檢查每一題的答案確實出現在「來源頁的 chunk」裡。如果 chunk 裡沒有答案，後面的檢索再怎麼優化也找不到。目前 40 題通過，2 題是已知的解析問題（標記 xfail）。
 
 **快取**：解析結果以「PDF 的 SHA-256 + `PARSER_VERSION`」當 key 存起來。修改解析程式時要把版本號加一，否則會拿到舊程式產生的過期結果。第一次約 2 分鐘，之後約 0.3 秒。
+
+### 檢索：用數字選，不照教科書選
+
+比較了 8 種組合（硬體：RTX 5070 Laptop）：
+
+| 做法 | r@1 | r@5 | MRR |
+|---|---|---|---|
+| BM25 | 0.25 | 0.62 | 0.44 |
+| bge-m3 向量 | 0.56 | 0.89 | 0.74 |
+| hybrid（BM25 + 向量） | 0.42 | 0.81 | 0.59 |
+| **型號過濾 + 向量 + reranker** | **0.81** | **1.00** | **0.88** |
+
+**hybrid 比單用向量差**：問題是中文、文件是英文，BM25 只比對得到型號，排名大多是雜訊。BM25 精確比對料號的好處，改用「型號過濾」取得。完整說明見 [design/retrieval.md](design/retrieval.md)。
 
 ### 為什麼選 pymupdf4llm？
 
