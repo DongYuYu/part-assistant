@@ -171,6 +171,7 @@ part-assistant/
 │   ├── sources.toml   # datasheet 清單：網址和 SHA-256（PDF 本身不進 git）
 │   ├── raw/           # 下載的 PDF（被 gitignore）
 │   └── processed/     # SQLite、解析結果（被 gitignore，可以重新產生）
+├── design/          # 各元件的設計說明（例如 chunking.md）
 ├── eval/
 │   └── golden.toml    # 黃金樣本 50 題
 └── tests/             # pytest
@@ -263,6 +264,8 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 所有規則都對應到**真實文件中的案例**，並且有測試鎖住（`tests/test_parse.py`）。
 
 ### 切段：讓每個 chunk 單獨被檢索到時也看得懂
+
+> 完整說明（含例子、取捨和可能的追問）見 [design/chunking.md](design/chunking.md)。
 
 | 規則 | 為什麼 |
 |---|---|
