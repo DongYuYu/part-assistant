@@ -2,7 +2,7 @@
 
 工廠知識問答和工單 Agent：用 **RAG、Tool Use 和 MCP**，回答伺服器電源的規格問題、查料號和庫存，並且開立工單。
 
-> **專案性質**：這是一個學習用的作品集 side project，**不是正式上線的系統**。
+> **專案性質**：個人 side project，用公開資料和假資料示範一個完整的 AI agent 應用，**不是正式上線的系統**。
 > - 知識庫是各電源廠商**公開下載**的 datasheet。
 > - 料號、庫存、工單都是**自己產生的假資料**。
 > - 不含任何公司的內部資料。測出來的效能數字都會註明硬體環境。
@@ -392,7 +392,7 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 
 ### 切段：讓每個 chunk 單獨被檢索到時也看得懂
 
-> 完整說明（含例子、取捨和可能的追問）見 [design/chunking.md](design/chunking.md)。
+> 完整說明（含例子、取捨和常見問題）見 [design/chunking.md](design/chunking.md)。
 
 | 規則 | 為什麼 |
 |---|---|
@@ -420,6 +420,15 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 | **型號過濾 + 向量 + reranker** | **0.81** | **1.00** | **0.88** |
 
 **hybrid 比單用向量差**：問題是中文、文件是英文，BM25 只比對得到型號，排名大多是雜訊。BM25 精確比對料號的好處，改用「型號過濾」取得。完整說明見 [design/retrieval.md](design/retrieval.md)。
+
+### Agent、評測、MCP：規則寫在程式裡
+
+- **安全規則不靠 prompt**：高嚴重度工單的 schema 沒有「已核准」欄位；idempotency key 由程式產生；找不到的料號只列出相似料號，不會自動替換。
+- **自己寫迴圈**（約 80 行）：每一步都能控制步數和成本上限、trace，以及需要人確認時停下來。
+- **評測看使用者實際看到的回答**：文字、引用頁碼、呼叫的工具、拒答、反問、確認，逐項批改；閱卷程式本身也有測試。
+- **MCP 版本**把同樣的規則搬進 server：idempotency key 由 server 產生，高嚴重度用 elicitation 跳出表單請使用者確認，host 不支援時一律不建立工單。
+
+> 完整說明和常見問題見 [design/agent.md](design/agent.md)。
 
 ### 為什麼選 pymupdf4llm？
 
