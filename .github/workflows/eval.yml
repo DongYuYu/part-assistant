@@ -3,8 +3,10 @@
 # COSTS MONEY (~$1.4 per run, capped at $3), so it runs ONLY when a PR gets the
 # `run-eval` label. To run it again after new commits: remove the label, add it again.
 #
-# GitHub runners have no GPU: retrieval runs on CPU (~20 s per rerank), so a full
-# run takes ~30-40 min. Models and processed data are cached between runs.
+# GitHub runners have no GPU: retrieval runs on CPU (~25+ s per rerank), so a full
+# run takes 1-2 hours. Models, processed data and chunk embeddings are cached.
+# Each finished case is saved at once (runs/*.partial.jsonl), so a run that times out
+# still uploads what it finished and what it cost.
 #
 # Security: `pull_request` (not `pull_request_target`), so PRs from forks never
 # get the secret; read-only token; the key lives only in the repository secret.
@@ -25,7 +27,7 @@ jobs:
   eval:
     if: github.event.label.name == 'run-eval'
     runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to a new OS version
-    timeout-minutes: 90
+    timeout-minutes: 180  # CPU rerank ~25+ s per search; first run also embeds all chunks
     env:
       HF_HOME: /home/runner/.cache/huggingface
     steps:

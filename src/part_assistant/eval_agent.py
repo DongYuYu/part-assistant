@@ -111,7 +111,14 @@ def n_tickets(tools: Tools) -> int:
     return tools.conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0]
 
 
-def run_eval(agent: Agent, cases: list[Case], max_usd: float, log=print) -> list[Grade]:
+def _log(msg: str) -> None:
+    print(msg, flush=True)  # CI logs are not a terminal: unflushed lines appear only at exit
+
+
+def run_eval(agent: Agent, cases: list[Case], max_usd: float, log=_log,
+             on_grade=None) -> list[Grade]:
+    """on_grade(g) is called after every case, e.g. to save it at once: a run killed by a
+    timeout then still leaves the cases it finished (and what they cost)."""
     grades: list[Grade] = []
     spent = 0.0
     for i, case in enumerate(cases, 1):
@@ -137,6 +144,8 @@ def run_eval(agent: Agent, cases: list[Case], max_usd: float, log=print) -> list
                   cost_usd=round(result.cost_usd, 6),
                   seconds=round(time.perf_counter() - t0, 1), answer=result.answer)
         grades.append(g)
+        if on_grade is not None:
+            on_grade(g)
         mark = "PASS" if g.passed else ("xfail" if g.known_issue else "FAIL")
         log(f"[{i:2d}/{len(cases)}] {mark:5s} {case.id:12s} ${g.cost_usd:.4f} {g.seconds:5.1f}s "
             + ("; ".join(problems) if problems else ""))
@@ -244,12 +253,18 @@ def main() -> None:
                       + "; ".join(g.problems))
         out = args.regrade.with_name(args.regrade.stem + "-regraded.json")
     else:
-        with tempfile.TemporaryDirectory() as tmp:
-            agent = build_eval_agent(Path(tmp) / "eval.db")
-            grades = run_eval(agent, cases, args.max_usd)
-        model = agent.model
         RUNS_DIR.mkdir(exist_ok=True)
         out = RUNS_DIR / f"eval-{time.strftime('%Y%m%d-%H%M%S')}.json"
+        partial = out.with_suffix(".partial.jsonl")  # one line per finished case
+        with tempfile.TemporaryDirectory() as tmp, partial.open("w") as f:
+            agent = build_eval_agent(Path(tmp) / "eval.db")
+
+            def save(g: Grade) -> None:
+                f.write(json.dumps(asdict(g), ensure_ascii=False) + "\n")
+                f.flush()
+
+            grades = run_eval(agent, cases, args.max_usd, on_grade=save)
+        model = agent.model
 
     summary = summarize(grades)
     out.write_text(json.dumps({"model": model, "summary": summary,

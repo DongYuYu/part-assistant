@@ -140,3 +140,11 @@ def test_markdown_report_lists_failures():
     row = next(line for line in md.splitlines() if line.startswith("| x-01 "))
     assert row.count("|") == 3, "a '|' inside a problem must not add a table column"
     assert "x-02" not in md  # passing cases are not listed
+
+
+def test_each_case_is_reported_as_soon_as_it_finishes(tools):
+    seen = []
+    agent = Agent(tools, FakeClient(text("規格書沒有寫保固。"), text("規格書沒有寫保固。")))
+    run_eval(agent, [CASES["refuse-01"], CASES["refuse-01"]], 5.0, log=lambda *_: None,
+             on_grade=lambda g: seen.append(g.id))
+    assert seen == ["refuse-01", "refuse-01"]

@@ -369,7 +369,7 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 | `eval.yml` | PR 加上 **`run-eval`** 標籤時 | 下載 datasheet → 切段 → 真的 agent 回答 50 題，**通過率低於 95% 就失敗**；結果表格顯示在執行頁面，JSON 存成 artifact | 約 $1.4，上限 $3 |
 
 - 為什麼要加標籤才跑：每次評測都要花錢，改文件或 README 不需要跑。新的 commit 不會自動重跑，要移除標籤再加回去。
-- GitHub 的機器沒有 GPU，reranker 跑在 CPU 上，一次評測約 30–40 分鐘；模型和解析結果會快取。
+- GitHub 的機器沒有 GPU，reranker 跑在 CPU 上，一次評測約 1–2 小時；模型和解析結果會快取。
 - API key 只放在 repo 的 Secrets（`ANTHROPIC_API_KEY`）。觸發用 `pull_request` 而不是 `pull_request_target`，所以從 fork 來的 PR 拿不到 key；第三方 action 都鎖定 commit SHA。
 
 ---
