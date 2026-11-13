@@ -21,6 +21,7 @@ data/processed/*
 *.sqlite
 *.db
 traces/
+runs/
 
 # --- Editor / OS ---
 .vscode/
