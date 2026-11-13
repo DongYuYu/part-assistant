@@ -106,7 +106,7 @@ flowchart TB
 - ✅ 黃金樣本 50 題，加上驗證測試
 - ✅ 切段（chunk），加上解析快取
 - ✅ 檢索：型號過濾 + bge-m3 向量 + reranker（比較過 BM25、hybrid 和 3 個 embedding 模型；r@5 = 1.00、MRR = 0.88）
-- ⬜ 4 個工具和 agent 迴圈
+- 🚧 4 個工具和 agent 迴圈（程式和離線測試完成，還沒接上真的模型跑黃金樣本）
 - ⬜ 評測程式，跑出第一個分數
 - ⬜ MCP server
 - ⬜ `create_ticket` 的冪等和逾時重試測試
@@ -169,6 +169,8 @@ part-assistant/
 │   ├── chunk.py       # 區塊 → 檢索用的 chunk（附檔名、頁碼、章節）
 │   ├── retrieve.py    # 型號過濾、向量檢索、reranker（BM25 和 hybrid 可選）
 │   ├── eval_retrieval.py  # 用黃金樣本計算 recall@k 和 MRR
+│   ├── tools.py       # 4 個工具和 JSON schema；安全規則寫在程式裡
+│   ├── agent.py       # agent 迴圈：步數和成本上限、trace、高嚴重度要人工確認
 │   └── golden.py      # 讀取黃金樣本、比對答案
 ├── data/
 │   ├── sources.toml   # datasheet 清單：網址和 SHA-256（PDF 本身不進 git）
