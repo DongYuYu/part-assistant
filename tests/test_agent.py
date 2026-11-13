@@ -137,3 +137,22 @@ def test_request_uses_strict_tools_and_no_key_in_code(tools):
     assert {t["name"] for t in req["tools"]} == {
         "search_docs", "lookup_part", "check_stock", "create_ticket"}
     assert "api_key" not in req
+
+
+@pytest.mark.parametrize("reason,stop", [
+    ("end_turn", "done"), ("max_tokens", "truncated"),
+    ("model_context_window_exceeded", "truncated"), ("refusal", "refusal"),
+    ("something_new", "something_new"),  # unknown: never silently "done"
+])
+def test_stop_reason_mapping(tools, reason, stop):
+    resp = NS(content=[NS(type="text", text="x")], stop_reason=reason, usage=usage(),
+              model="claude-opus-5-5")
+    assert Agent(tools, FakeClient(resp)).run("q").stop == stop
+
+
+def test_show_prints_each_exchange(tools, capsys):
+    client = FakeClient(tool_use(("check_stock", {"part_no": "PSU-1600-54V"})), text("513"))
+    Agent(tools, client, show=True).run("庫存？")
+    out = capsys.readouterr().out
+    assert "第 1 次呼叫 API" in out and "第 2 次呼叫 API" in out
+    assert "check_stock" in out and "tool_result" in out and "stop_reason=end_turn" in out

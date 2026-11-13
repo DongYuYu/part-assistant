@@ -1,6 +1,7 @@
 """The agent loop: ask the model, run the tools it asks for, repeat until it answers.
 
-    uv run python -m part_assistant.agent "TEC3200 在 50% 負載時的效率是多少？"
+    uv run --env-file .env python -m part_assistant.agent "TEC3200 在 50% 負載時的效率是多少？"
+    uv run --env-file .env python -m part_assistant.agent --show "..."   # print every API exchange
 
 Limits (an agent must always stop): at most MAX_STEPS model calls and MAX_COST_USD
 per question. Every model call and tool call is recorded in a trace (time, tokens, cost).
@@ -53,7 +54,7 @@ Rules:
 @dataclass
 class AgentResult:
     answer: str
-    stop: str  # done | needs_confirmation | max_steps | budget | truncated | refusal
+    stop: str  # done | needs_confirmation | max_steps | budget | truncated | refusal | ...
     tool_calls: list[dict] = field(default_factory=list)  # {"name", "input", "output"}
     pending_ticket: dict | None = None  # high-severity draft waiting for a human
     trace: list[dict] = field(default_factory=list)
@@ -70,6 +71,56 @@ def call_cost(model: str, usage) -> float:
     ) / 1_000_000
 
 
+# What each API stop_reason means for the loop. tool_use and pause_turn continue the loop;
+# everything else ends it. An unknown future value ends it under its own name, never "done".
+STOP_REASONS = {
+    "end_turn": "done",                           # the model finished its answer
+    "stop_sequence": "done",                      # hit a custom stop string (we set none)
+    "max_tokens": "truncated",                    # ran out of max_tokens mid-answer
+    "model_context_window_exceeded": "truncated",  # conversation no longer fits the model
+    "refusal": "refusal",                         # safety classifier declined
+}
+
+
+def _short(s, n: int = 300) -> str:
+    s = str(s)
+    return s if len(s) <= n else f"{s[:n]}…（共 {len(s)} 字）"
+
+
+def _block_line(b) -> str:
+    get = (lambda k: b.get(k)) if isinstance(b, dict) else (lambda k: getattr(b, k, None))
+    t = get("type")
+    if t == "text":
+        return f"[text] {get('text')}"
+    if t == "tool_use":
+        args = json.dumps(get("input"), ensure_ascii=False)
+        return f"[tool_use {get('id')}] {get('name')}({args})"
+    if t == "tool_result":
+        return f"[tool_result → {get('tool_use_id')}] {_short(get('content'))}"
+    if t == "thinking":
+        return f"[thinking] {_short(get('thinking') or '（內容未回傳）', 200)}"
+    return f"[{t}]"
+
+
+def show_request(step: int, new_messages: list[dict], n_cached: int) -> None:
+    """--show: print what this API call adds on top of the previous one."""
+    print(f"\n{'=' * 70}\n>>> 第 {step} 次呼叫 API（前 {n_cached} 則訊息和上次相同）")
+    for m in new_messages:
+        content = m["content"]
+        for b in [content] if isinstance(content, str) else content:
+            print(f"      {m['role']:9s} {f'[text] {b}' if isinstance(b, str) else _block_line(b)}")
+
+
+def show_response(response) -> None:
+    u = response.usage
+    print(f"<<< stop_reason={response.stop_reason}  tokens: in={u.input_tokens} "
+          f"cache_read={getattr(u, 'cache_read_input_tokens', 0) or 0} "
+          f"cache_write={getattr(u, 'cache_creation_input_tokens', 0) or 0} "
+          f"out={u.output_tokens}")
+    for b in response.content:
+        print(f"      assistant {_block_line(b)}")
+
+
 def idempotency_key(session_id: str, part_no: str, severity: str) -> str:
     """Chosen by the harness, not the model: the same request in the same session always
     maps to the same key, so a retry (or the model asking twice) cannot open two tickets."""
@@ -78,7 +129,8 @@ def idempotency_key(session_id: str, part_no: str, severity: str) -> str:
 
 class Agent:
     def __init__(self, tools: Tools, client=None, model: str = MODEL,
-                 max_steps: int = MAX_STEPS, max_cost_usd: float = MAX_COST_USD):
+                 max_steps: int = MAX_STEPS, max_cost_usd: float = MAX_COST_USD,
+                 show: bool = False):
         if client is None:  # tests pass a fake client
             import anthropic
 
@@ -88,6 +140,7 @@ class Agent:
         self.model = model
         self.max_steps = max_steps
         self.max_cost_usd = max_cost_usd
+        self.show = show  # print every request/response (for learning and demos)
 
     # --- tools
 
@@ -113,7 +166,11 @@ class Agent:
         messages: list[dict] = [{"role": "user", "content": question}]
         result = AgentResult(answer="", stop="max_steps")
 
+        shown = 0  # messages already printed by --show
         for step in range(1, self.max_steps + 1):
+            if self.show:
+                show_request(step, messages[shown:], shown)
+                shown = len(messages) + 1  # + the assistant reply appended below
             t0 = time.perf_counter()
             response = self.client.beta.messages.create(
                 model=self.model,
@@ -127,6 +184,8 @@ class Agent:
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
             )
+            if self.show:
+                show_response(response)
             cost = call_cost(self.model, response.usage)
             result.cost_usd += cost
             result.trace.append({
@@ -147,8 +206,7 @@ class Agent:
                 continue
             if response.stop_reason != "tool_use":
                 result.answer = text
-                result.stop = {"end_turn": "done", "max_tokens": "truncated",
-                               "refusal": "refusal"}.get(response.stop_reason, "done")
+                result.stop = STOP_REASONS.get(response.stop_reason, response.stop_reason)
                 break
 
             tool_results = []
@@ -202,18 +260,20 @@ def save_trace(question: str, result: AgentResult, trace_dir: Path = TRACE_DIR) 
     return path
 
 
-def build_agent() -> Agent:
+def build_agent(show: bool = False) -> Agent:
     from part_assistant.chunk import load_chunks
     from part_assistant.db import connect
     from part_assistant.retrieve import Embedder, Reranker, Retriever
 
     retriever = Retriever(load_chunks(), Embedder(), Reranker())
-    return Agent(Tools(connect(), retriever))
+    return Agent(Tools(connect(), retriever), show=show)
 
 
 def main() -> None:
-    question = " ".join(sys.argv[1:]) or "TEC3200 在 50% 負載時的效率是多少？"
-    agent = build_agent()
+    args = sys.argv[1:]
+    show = "--show" in args
+    question = " ".join(a for a in args if a != "--show") or "TEC3200 在 50% 負載時的效率是多少？"
+    agent = build_agent(show=show)
     result = agent.run(question)
     for call in result.tool_calls:
         print(f"  [tool] {call['name']}({json.dumps(call['input'], ensure_ascii=False)})")
