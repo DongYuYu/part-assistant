@@ -26,7 +26,7 @@ category = "spec"
 question = "TEC3200-54 的主輸出電壓是多少？"
 expect = "answer"
 must_include = [["54 V", "54V", "54 VDC"]]
-sources = [{ file = "bel-tec3200-54.pdf", page = 1 }]
+sources = [{ file = "bel-tec3200-54.pdf", page = 1 }, { file = "bel-tec3200-54.pdf", page = 3 }]
 why = "Basic fact on the cover page."
 
 [[case]]

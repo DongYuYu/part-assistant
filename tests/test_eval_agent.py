@@ -114,3 +114,16 @@ def test_known_issues_are_not_scored(tools):
     grades = run_eval(agent, [known, CASES["refuse-01"]], 5.0, log=lambda *_: None)
     s = summarize(grades)
     assert s["scored"] == 1 and s["pass_rate"] == 1.0 and known.id in s["known_issues"]
+
+
+def test_regrade_uses_the_current_golden_set_without_calling_the_api(tools):
+    from dataclasses import asdict, replace
+
+    from part_assistant.eval_agent import regrade
+
+    g = run(tools, "multi-01", tool_use(LOOKUP), tool_use(SEARCH),
+            text("9 ms（bel-tec3200-54.pdf p.3）"))
+    assert not g.passed  # golden set only lists p.2
+    fixed = replace(CASES["multi-01"], sources=[SRC, {**SRC, "page": 3}])
+    again = regrade([asdict(g)], [fixed])[0]
+    assert again.passed, again.problems
