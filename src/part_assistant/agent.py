@@ -135,6 +135,8 @@ class Agent:
                 "input_tokens": response.usage.input_tokens,
                 "output_tokens": response.usage.output_tokens,
                 "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+                "cache_write_tokens":
+                    getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
                 "cost_usd": round(cost, 6), "stop_reason": response.stop_reason,
             })
             # Keep the whole content (thinking blocks too), not just the text.
