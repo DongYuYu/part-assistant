@@ -24,7 +24,7 @@ concurrency:
 jobs:
   eval:
     if: github.event.label.name == 'run-eval'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to a new OS version
     timeout-minutes: 90
     env:
       HF_HOME: /home/runner/.cache/huggingface
