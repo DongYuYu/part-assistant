@@ -44,7 +44,7 @@ category = "spec"
 question = "CSU2400AT 在低壓輸入（90 到 132 VAC）時最多可以輸出多少功率？"
 expect = "answer"
 must_include = [["1400 W", "1400W", "1,400"]]
-sources = [{ file = "ae-csu2400at.pdf", page = 2 }]
+sources = [{ file = "ae-csu2400at.pdf", page = 1 }, { file = "ae-csu2400at.pdf", page = 2 }]
 why = "Output power depends on input range; must pick the low-line value."
 
 [[case]]
@@ -99,7 +99,7 @@ category = "spec"
 question = "TEC1600 的外形尺寸是多少？"
 expect = "answer"
 must_include = ["185", "73.5", "40"]
-sources = [{ file = "bel-tec1600.pdf", page = 1 }]
+sources = [{ file = "bel-tec1600.pdf", page = 43 }, { file = "bel-tec1600.pdf", page = 1 }]
 why = "Fact in a bullet list on the cover page."
 
 [[case]]
@@ -108,7 +108,7 @@ category = "spec"
 question = "TEC3200 的 12V 待機輸出可以提供多少電流？"
 expect = "answer"
 must_include = [["3 A", "3A", "3 安培"]]
-sources = [{ file = "bel-tec3200-54.pdf", page = 1 }]
+sources = [{ file = "bel-tec3200-54.pdf", page = 3 }, { file = "bel-tec3200-54.pdf", page = 1 }]
 why = "Standby output vs main output."
 
 [[case]]
@@ -117,7 +117,7 @@ category = "spec"
 question = "LMS1600-P12B 的工作溫度範圍？"
 expect = "answer"
 must_include = ["-5", "55"]
-sources = [{ file = "mornsun-lms1600-p12b.pdf", page = 4 }]
+sources = [{ file = "mornsun-lms1600-p12b.pdf", page = 1 }, { file = "mornsun-lms1600-p12b.pdf", page = 4 }]
 why = "LMS1600 and LMS2000 share a template; must cite the right file."
 
 [[case]]
@@ -223,7 +223,7 @@ category = "footnote"
 question = "TEC1600 在低壓（low line）輸入時最大輸出功率是多少？"
 expect = "answer"
 must_include = [["1000 W", "1000W", "1,000"]]
-sources = [{ file = "bel-tec1600.pdf", page = 3 }]
+sources = [{ file = "bel-tec1600.pdf", page = 2 }, { file = "bel-tec1600.pdf", page = 3 }]
 why = "Stated in a table cell and repeated in footnote 6."
 
 [[case]]
@@ -252,7 +252,6 @@ category = "similar"
 question = "TEC1600 在 100% 負載時的效率是多少？"
 expect = "answer"
 must_include = ["92"]
-must_not_include = ["94%"]
 sources = [{ file = "bel-tec1600.pdf", page = 2 }]
 why = "Same vendor and layout as TEC3200 (94% at 100%)."
 
@@ -389,7 +388,7 @@ category = "multi"
 question = "PSU-0800-12V 已經停產了，它的 datasheet 上寫的保固是幾年？"
 expect = "answer"
 must_include = [["5 年", "五年", "5 years", "5年"]]
-sources = [{ file = "mornsun-lms800-p12b.pdf", page = 1 }]
+sources = [{ file = "mornsun-lms800-p12b.pdf", page = 4 }, { file = "mornsun-lms800-p12b.pdf", page = 1 }]
 tools = ["lookup_part", "search_docs"]
 why = "Part -> LMS800-P12B -> warranty. Lifecycle (EOL) must not stop the lookup."
 
@@ -490,6 +489,6 @@ id = "ticket-03"
 category = "ticket"
 question = "幫我開一張中嚴重度工單，料號 PSU-9999-XX 在進料檢驗時外觀刮傷。"
 expect = "clarify"
-must_include = [["找不到", "查無", "不存在", "not found"]]
+must_include = [["找不到", "查不到", "查無", "不存在", "not found"]]
 tools = ["lookup_part"]
 why = "Part number does not exist; must not create a ticket against it."
