@@ -6,15 +6,25 @@ Pipeline (each step is a small function, tested in tests/test_parse.py):
   3. Footnote markers (small raised digits) become [^n] so "0 A 1" is not read as a value.
   4. Borderless tables: empty parameter-name cells are filled using row shading/lines.
   5. Tables continued on the next page are merged.
+
+parse_pdf_cached() stores the result keyed by (PDF sha256, PARSER_VERSION).
 """
 
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
 import pymupdf
 import pymupdf4llm
+
+from part_assistant.download import sha256_of
+
+# Bump this whenever a code change can change parse output. It is part of the cache
+# key: the PDF did not change, but the code did, so old cached results are stale.
+PARSER_VERSION = "1"
+CACHE_DIR = Path("data/processed/parsed")
 
 
 @dataclass
@@ -356,3 +366,28 @@ def _merge_continued_table(done: list[Block], page_blocks: list[Block]) -> None:
     a.page_end = b.page_end
     a.labels_inferred |= b.labels_inferred
     page_blocks.pop(0)
+
+
+# ---------------------------------------------------------------------------
+# Cache: parsing all 9 PDFs takes ~2 minutes, chunking takes < 1 second
+# ---------------------------------------------------------------------------
+
+def parse_pdf_cached(path: str | Path, cache_dir: Path = CACHE_DIR) -> list[Block]:
+    path = Path(path)
+    key = f"{sha256_of(path)[:16]}.v{PARSER_VERSION}"
+    cache = cache_dir / f"{path.stem}.{key}.json"
+    if cache.exists():
+        return [_block_from_dict(d) for d in json.loads(cache.read_text())]
+    blocks = parse_pdf(path)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    for old in cache_dir.glob(f"{path.stem}.*.json"):  # stale versions of this PDF
+        old.unlink()
+    tmp = cache.with_suffix(".part")
+    tmp.write_text(json.dumps([asdict(b) for b in blocks], ensure_ascii=False))
+    tmp.replace(cache)  # atomic: a crash never leaves a half-written cache file
+    return blocks
+
+
+def _block_from_dict(d: dict) -> Block:
+    table = Table(**d["table"]) if d["table"] else None
+    return Block(d["kind"], d["page"], d["text"], table)

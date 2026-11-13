@@ -104,7 +104,7 @@ flowchart TB
 - ✅ 9 份公開 datasheet 下載，附 SHA-256 驗證
 - ✅ PDF 解析和表格後處理（合併儲存格、註腳、跨頁表格）
 - ✅ 黃金樣本 50 題，加上驗證測試
-- 🚧 切段（chunk）
+- ✅ 切段（chunk），加上解析快取
 - ⬜ Hybrid 檢索（BM25 + 多語向量）
 - ⬜ 4 個工具和 agent 迴圈
 - ⬜ 評測程式，跑出第一個分數
@@ -148,6 +148,7 @@ cd part-assistant
 uv sync                                   # 安裝套件（版本鎖定在 uv.lock）
 uv run python -m part_assistant.download  # 下載 9 份 datasheet 到 data/raw/，並驗證 SHA-256
 uv run python -m part_assistant.seed      # 產生 SQLite 假資料到 data/processed/factory.db
+uv run python -m part_assistant.chunk     # 解析 PDF 並切段 → data/processed/chunks.jsonl（第一次約 2 分鐘）
 uv run pytest -q                          # 跑全部測試
 ```
 
@@ -163,7 +164,8 @@ part-assistant/
 │   ├── db.py          # SQLite 資料表和連線
 │   ├── seed.py        # 產生假資料（每次結果都一樣）
 │   ├── download.py    # 照清單下載 datasheet，驗證 SHA-256
-│   ├── parse.py       # PDF → 文字和表格區塊，加上後處理
+│   ├── parse.py       # PDF → 文字和表格區塊，加上後處理和快取
+│   ├── chunk.py       # 區塊 → 檢索用的 chunk（附檔名、頁碼、章節）
 │   └── golden.py      # 讀取黃金樣本、比對答案
 ├── data/
 │   ├── sources.toml   # datasheet 清單：網址和 SHA-256（PDF 本身不進 git）
@@ -260,6 +262,22 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 
 所有規則都對應到**真實文件中的案例**，並且有測試鎖住（`tests/test_parse.py`）。
 
+### 切段：讓每個 chunk 單獨被檢索到時也看得懂
+
+| 規則 | 為什麼 |
+|---|---|
+| 表格不從列中間切開；大表依列切開，**每一段都重複表頭** | 只有 `\| 94 \| % \|` 沒有表頭，就不知道是哪個負載下的效率 |
+| 表格後面的**註腳說明複製進表格的 chunk** | 只檢索到 `0 A[^1]`，模型看不到「最小負載 5%」的條件 |
+| colspan 展開的重複儲存格合併成一個 | 同一個值重複 6 次會浪費 token，也會干擾 embedding |
+| 文字遇到標題就切開；約 400 tokens，下一段重複前一段結尾約 15% | 邊界上的句子不會被切成兩半；overlap 不跨章節 |
+| 每個 chunk 開頭加上 `[廠商 \| 型號 \| 檔名 \| 頁碼 \| 章節]` | 內文常寫 "the power supply" 而不寫型號；加上前綴，BM25 才能用型號找到它，回答也能附出處 |
+| `chunk_id` = 內容的雜湊值 | 內容不變，ID 就不變，之後 embedding 只需處理有變動的 chunk |
+| 先預留 `revision`、`access_level` 欄位 | 之後做版本和權限過濾時，不必整份重建索引 |
+
+**用黃金樣本檢查上限**：`tests/test_chunk.py` 會檢查每一題的答案確實出現在「來源頁的 chunk」裡。如果 chunk 裡沒有答案，後面的檢索再怎麼優化也找不到。目前 40 題通過，2 題是已知的解析問題（標記 xfail）。
+
+**快取**：解析結果以「PDF 的 SHA-256 + `PARSER_VERSION`」當 key 存起來。修改解析程式時要把版本號加一，否則會拿到舊程式產生的過期結果。第一次約 2 分鐘，之後約 0.3 秒。
+
 ### 為什麼選 pymupdf4llm？
 
 我們用同一張困難表格比較過 `pdfplumber` 和 `pymupdf4llm`。pdfplumber 靠表格的**格線**找表格，所以**漏掉了整張無格線的表格**。pymupdf4llm 有版面分析模型，而且能輸出帶 `rowspan` 的 HTML。
@@ -283,7 +301,9 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 - **約 50 張表格的參數名稱是「推測」的**：找不到視覺邊界時退回向下補滿，並標記 `labels_inferred`。
 - **LMS2700-T12B 的效率表解析錯誤**：10% 和 20% 兩列遺失，Input Current 被誤標成 Efficiency。黃金樣本 `table-05` 和 `table-06` 用來追蹤這個問題。
 - **電路圖可能被誤判成表格**（例如 PES1600 第 8 頁）。
-- **解析很慢**：9 份文件約 2 分鐘，因為版面分析模型跑在 CPU 上。之後會做快取。
+- **第一次解析很慢**：9 份文件約 2 分鐘，因為版面分析模型跑在 CPU 上。之後會使用快取（約 0.3 秒）。
+- **token 數是估計值**：目前以「4 個字元約等於 1 個 token」估算，確切數字要等選定 embedding 模型後再用它的 tokenizer 計算。
+- **跨頁的大表被切開後，每一段都標示整張表的頁碼範圍**（例如 `p.12-14`），因為合併時沒有保留每一列的頁碼。
 - **問題是中文、文件是英文**：BM25 無法用「效率」比對到 "Efficiency"，所以向量檢索要用多語 embedding 模型。
 
 ---
