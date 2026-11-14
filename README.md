@@ -188,18 +188,20 @@ docker compose run --rm app ask "PSU-3200-54V 滿載時的 hold-up time 是多�
 | `ollama`、`ollama-pull` | 降級用的地端模型（qwen3:4b） |
 | `app` | 回答問題：`ask "問題"`；也可以 `mcp`（MCP server）、`eval`（端到端評測，會花錢）、`bash` |
 
-實測（WSL2、容器只用 CPU）：
+實測（WSL2；GPU 是 RTX 5070 Laptop 8 GB）：
 
-| 步驟 | 時間 | 說明 |
-|---|---|---|
-| 建置映像檔 | 約 6 分鐘 | 映像檔 4.3 GB（解壓後 12.3 GB，大部分是 CUDA 版的 torch） |
-| 第一次 `up` | 約 16 分鐘 | 下載約 7 GB 的模型，用 CPU 算 696 個 chunk 的 embedding |
-| 之後再 `up` | 約 15 秒 | 資料和模型都在 volume 裡，不會重新下載或重算 |
-| 一題降級回答 | 約 1.5–2 分鐘 | 地端模型在 CPU 上很慢；有 GPU 時約 25 秒 |
+| 步驟 | 只用 CPU | 用 GPU | 說明 |
+|---|---|---|---|
+| 建置映像檔 | 約 6 分鐘 | 同左 | 映像檔 4.3 GB（解壓後 12.3 GB，大部分是 CUDA 版的 torch） |
+| 第一次 `up` | 約 16 分鐘 | — | 下載約 7 GB 的模型，算 696 個 chunk 的 embedding（只測了 CPU） |
+| 之後再 `up` | 約 15 秒 | 約 20 秒 | 資料和模型都在 volume 裡，不會重新下載或重算 |
+| 檢索一次 | 約 22 秒 | 0.5–1.2 秒 | bge-m3 + reranker 前 20 段 |
+| 地端模型回答一題（降級） | 約 100 秒 | 約 40 秒 | qwen3:4b 開思考，時間隨思考長短變動 |
 
 - **資料存在 Docker volume**：重建映像檔不會遺失資料，開過的工單也還在。`docker compose down -v` 會連 volume 一起刪掉。
 - **`app` 不連 Hugging Face**（`HF_HUB_OFFLINE=1`）：模型已經由 `prepare` 下載好，啟動時不必上網檢查更新。
-- **用 GPU**：裝好 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) 後執行 `docker compose -f compose.yaml -f compose.gpu.yaml up -d`（尚未實測）。
+- **用 GPU**：裝好 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) 後執行 `docker compose -f compose.yaml -f compose.gpu.yaml up -d`。不想每次打兩個 `-f`，可以在 `.env` 加一行 `COMPOSE_FILE=compose.yaml:compose.gpu.yaml`。
+- **沒有 GPU**：只用 `compose.yaml` 就好，全部跑在 CPU 上，功能相同、比較慢。程式會自動判斷有沒有 CUDA。沒有 GPU 卻加上 `compose.gpu.yaml`，Docker 會在啟動時直接報錯，不會偷偷改用 CPU。
 
 ---
 
