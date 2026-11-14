@@ -59,7 +59,7 @@
 
 | 規則 | 怎麼做到 | 測試 |
 |---|---|---|
-| 高嚴重度工單要人確認 | schema **沒有**「已核准」欄位，模型無從自己核准。工具只回傳 `needs_human_confirmation`，不寫入資料庫。人同意後由 `Agent.approve()` 寫入，不經過模型 | `test_high_severity_needs_a_human`、`test_high_severity_stops_for_a_human_then_approve_once` |
+| 高嚴重度工單要人確認 | schema **沒有**「已核准」欄位，模型無從自己核准。工具只回傳 `needs_human_confirmation`，不寫入資料庫。人同意後由 `Agent.approve()` 寫入，不經過模型；核准人和時間存進 `approved_by`、`approved_at`。資料表本身也有 CHECK 約束：高嚴重度沒有核准人就存不進去 | `test_high_severity_needs_a_human`、`test_high_severity_stops_for_a_human_then_approve_once`、`test_database_refuses_an_unapproved_high_ticket` |
 | 重試不能重複開單 | idempotency key 由**程式**算：`sha256(對話 ID, 料號, 嚴重度)`。schema 沒有這個欄位。資料庫有 UNIQUE 約束當最後防線 | `test_same_idempotency_key_never_creates_a_second_ticket`、`test_model_asking_twice_in_one_session_opens_one_ticket` |
 | 不自動替換料號 | 找不到時只列相似的料號，不回傳任何一個料號的資料 | `test_unknown_part_lists_similar_but_never_picks_one` |
 | 參數格式一定正確 | 所有 schema 都是 `strict: true`、`additionalProperties: false`、每個欄位都是必填 | `test_schemas_are_strict` |
@@ -196,10 +196,9 @@ MCP：            Claude Code / Claude Desktop（host 自己有模型和迴圈�
 1. **關鍵字批改**：檢查不到「多說了錯的內容」。可以加上 LLM 評審，代價是要多花錢，而且評審本身也可能判錯。
 2. **48 題樣本小**：一題大約占 2%。
 3. **idempotency key 的範圍**：同一個對話裡，同一個料號、同一個嚴重度只會開一張單。如果真的要開兩張不同問題的低嚴重度單，第二張會被當成重複。這是「寧可少開，不要重複開」的取捨。
-4. **核准人沒有存進資料庫**：`tickets` 資料表還沒有 `approved_by` 欄位。這屬於稽核紀錄要補的部分。
+4. **核准人只記名字**：`approved_by` 存的是使用者自己輸入的名字，沒有登入驗證，無法證明真的是那個人。正式系統要接公司的身分驗證（SSO）。另外，用 `ALTER TABLE` 升級的舊資料庫沒有 CHECK 約束（SQLite 的限制），只有新建的資料庫有。
 5. **檢索雜訊會增加成本**：例如「hold-up」這個詞在 FRU 資料表裡也有出現，大表格會占掉很多 tokens。可以限制每段的長度，或降低這類表格的權重。
-6. **只有一個模型**：還沒有地端模型的路由，也還沒有「雲端失敗時改用地端」的機制。
-7. **MCP 的信任邊界**：elicitation 由 host 實作。如果 host 本身是一個會自己回答表單的 agent，就沒辦法保證真的有人確認。
+6. **MCP 的信任邊界**：elicitation 由 host 實作。如果 host 本身是一個會自己回答表單的 agent，就沒辦法保證真的有人確認。
 
 ---
 
@@ -216,6 +215,10 @@ prompt 只是建議。模型可能誤解，也可能被 datasheet 或使用者�
 ### Q：idempotency key 為什麼不讓模型給？
 
 模型每次重試可能給不同的 key，這樣 key 就沒有用了；而且 key 可能被注入的文字操控。由程式根據「對話、料號、嚴重度」計算，同一個請求一定得到同一個 key。資料庫的 UNIQUE 約束是最後防線，兩個請求同時寫入時，也只有一個會成功。
+
+### Q：程式已經檢查核准人了，為什麼資料表還要加 CHECK 約束？
+
+程式的檢查只保護「經過 `create_ticket` 的路徑」。之後可能有別的程式寫入同一張表：管理後台、批次匯入、某人手動下 SQL。CHECK 約束放在資料庫裡，不管從哪裡寫入都會被擋下。這和 idempotency key 的 UNIQUE 約束是同一個想法：重要的規則，最後一道防線放在資料本身。
 
 ### Q：模型一次要求呼叫兩個工具時怎麼處理？
 

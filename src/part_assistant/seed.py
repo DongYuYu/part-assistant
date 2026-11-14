@@ -78,7 +78,8 @@ def seed(conn: sqlite3.Connection, rng_seed: int = 42) -> None:
                     (part_no, wh, on_hand, reserved, SEED_TIME),
                 )
         conn.executemany(
-            "INSERT INTO tickets VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO tickets (ticket_id, idempotency_key, part_no, title, description,"
+            " severity, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [(*t, SEED_TIME) for t in TICKETS],
         )
 

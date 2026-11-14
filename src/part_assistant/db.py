@@ -36,9 +36,19 @@ CREATE TABLE IF NOT EXISTS tickets (
     description     TEXT NOT NULL,
     severity        TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high')),
     status          TEXT NOT NULL CHECK (status IN ('pending_approval', 'open', 'closed')),
-    created_at      TEXT NOT NULL
+    created_at      TEXT NOT NULL,
+    approved_by     TEXT,  -- the PERSON who approved a high-severity ticket (audit)
+    approved_at     TEXT,
+    -- last line of defense: no code path can store an unapproved high-severity ticket
+    CHECK (severity != 'high'
+           OR (trim(coalesce(approved_by, '')) != '' AND approved_at IS NOT NULL))
 );
 """
+
+# Columns added after the first version. A database created before them gets them
+# with ALTER TABLE (no data lost). SQLite can not add a table CHECK that way, so only
+# a newly created database has the CHECK above; tools.create_ticket checks it in code too.
+ADDED_COLUMNS = {"tickets": ["approved_by TEXT", "approved_at TEXT"]}
 
 
 def connect(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -54,3 +64,9 @@ def connect(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    for table, columns in ADDED_COLUMNS.items():
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column in columns:
+            if column.split()[0] not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
+    conn.commit()

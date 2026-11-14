@@ -5,6 +5,9 @@ import pytest
 from part_assistant.db import connect
 from part_assistant.seed import PARTS, SEED_TIME, WAREHOUSES, seed
 
+# Name the columns: a bare "INSERT ... VALUES" breaks when a column is added.
+COLS = "(ticket_id, idempotency_key, part_no, title, description, severity, status, created_at)"
+
 
 @pytest.fixture
 def conn():
@@ -43,7 +46,7 @@ def test_duplicate_idempotency_key_rejected(conn):
     """The UNIQUE constraint must block a second ticket with the same key."""
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO tickets VALUES ('TK-9999', 'seed-0001', NULL, 't', 'd',"
+            f"INSERT INTO tickets {COLS} VALUES ('TK-9999', 'seed-0001', NULL, 't', 'd',"
             " 'low', 'open', ?)",
             (SEED_TIME,),
         )
@@ -52,7 +55,8 @@ def test_duplicate_idempotency_key_rejected(conn):
 def test_invalid_severity_rejected(conn):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO tickets VALUES ('TK-9999', 'k', NULL, 't', 'd', 'urgent', 'open', ?)",
+            f"INSERT INTO tickets {COLS} VALUES ('TK-9999', 'k', NULL, 't', 'd', 'urgent',"
+            " 'open', ?)",
             (SEED_TIME,),
         )
 

@@ -93,6 +93,7 @@ class Tools:
             return self._not_found(part_no)
         if severity not in ("low", "medium", "high"):
             return {"error": f"invalid severity {severity!r}"}
+        approved_by = (approved_by or "").strip() or None  # "  " is not a name
         existing = self.conn.execute(
             "SELECT * FROM tickets WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
         if existing:
@@ -108,12 +109,14 @@ class Tools:
         with self.conn:  # one transaction: the id and the insert cannot interleave
             n = self.conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0]
             ticket_id = f"TK-{n + 1:04d}"
+            now = datetime.now(TZ).isoformat(timespec="seconds")
             try:
                 self.conn.execute(
                     "INSERT INTO tickets (ticket_id, idempotency_key, part_no, title, "
-                    "description, severity, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                    "description, severity, status, created_at, approved_by, approved_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (ticket_id, idempotency_key, part_no, title, description, severity,
-                     "open", datetime.now(TZ).isoformat(timespec="seconds")))
+                     "open", now, approved_by, now if approved_by else None))
             except sqlite3.IntegrityError:
                 # A concurrent request with the same key won the race: return its ticket.
                 row = self.conn.execute(

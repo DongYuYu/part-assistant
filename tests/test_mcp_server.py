@@ -88,6 +88,7 @@ async def test_high_ticket_is_written_only_after_a_person_accepts(tools):
         r = data(await client.call_tool("create_ticket", HIGH))
     assert asked and "高嚴重度" in asked[0]
     assert r["ticket_id"].startswith("TK-") and n_tickets(tools) == before + 1
+    assert r["approved_by"] == "QA lead"  # the name typed in the form, stored for audit
 
 
 @pytest.mark.anyio

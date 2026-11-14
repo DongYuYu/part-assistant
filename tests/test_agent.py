@@ -117,6 +117,7 @@ def test_high_severity_stops_for_a_human_then_approve_once(tools):
     second = agent.approve(r.pending_ticket, approver="QA lead")  # double click / retry
     assert first["ticket_id"] == second["ticket_id"] and second["duplicate"]
     assert n_tickets(tools) == before + 1
+    assert first["approved_by"] == "QA lead"  # who approved is stored, not just printed
 
 
 def test_model_asking_twice_in_one_session_opens_one_ticket(tools):
