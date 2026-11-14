@@ -113,7 +113,7 @@ flowchart TB
 - ✅ `create_ticket` 的冪等和重試測試（idempotency key 由程式產生，模型無法指定）
 - ✅ Trace（每次模型和工具呼叫的耗時、token、快取、成本）、步數和預算上限
 - ✅ 端到端評測：黃金樣本 48/48（2 題已知問題不計分），50 題 $1.38
-- ✅ MCP server（官方 Python SDK 2.x），可接 Claude Code / Claude Desktop
+- ✅ MCP server（官方 Python SDK 2.x），可接 Claude Code / Claude Desktop；已在 Claude Code 實測，高嚴重度工單會跳出確認表單（[說明](design/mcp.md)）
 - ✅ GitHub Actions：每次 push / PR 跑 lint 和測試；PR 加上 `run-eval` 標籤時跑端到端評測，低於 95% 就失敗
 - ✅ 模型路由：Claude 無法使用時降級到地端模型（Ollama qwen3:4b，只給唯讀工具）；依題型分流量過不划算，所以不做（[數字](design/routing.md)）
 - ✅ Docker Compose 一鍵啟動（prepare、app、ollama；資料和模型放在 volume）
@@ -274,6 +274,10 @@ npx @modelcontextprotocol/inspector \
 - 「料號 PSU-3200-54V 滿載時的 hold-up time 是多少？」→ `lookup_part`，再用原廠型號 `search_docs`
 - 「TEC3200 的保固是幾年？」→ 規格書沒寫，應該回答「沒有寫」
 - 「PSU-3200-54V 燒機冒煙，開一張高嚴重度工單」→ 見下面說明
+
+**以誰的身分**：啟動 host 時設定 `PART_ASSISTANT_USER`，例如 `PART_ASSISTANT_USER=alice claude`。稽核紀錄會記這個使用者，`search_docs` 也只搜這個使用者能看的文件。示範使用者是 alice（internal）和 bob（confidential）；沒設定時用作業系統帳號，只能看公開文件。
+
+**建議在空資料夾裡使用**：在專案資料夾裡，host 可以直接讀 `data/internal/` 的檔案，繞過權限過濾。設計和實測結果見 [design/mcp.md](design/mcp.md)。
 
 **高嚴重度工單**：server 會透過 MCP 的 elicitation 請 host **跳出表單**，要使用者填名字並同意才會建立。拒絕、取消、沒填名字，都不會建立工單。如果 host 不支援 elicitation，這個呼叫會失敗，**也不會建立工單**（fail closed）。低和中嚴重度會直接建立。
 

@@ -1,6 +1,7 @@
 # End-to-end eval: the real agent answers the golden set; fails below 95%.
+# Then the indirect prompt-injection test: 5 attacks; fails if any gets through.
 #
-# COSTS MONEY (~$1.4 per run, capped at $3), so it runs ONLY when a PR gets the
+# COSTS MONEY (~$1.4 + ~$0.16 per run, capped at $3 + $0.5), so it runs ONLY when a PR gets the
 # `run-eval` label. To run it again after new commits: remove the label, add it again.
 #
 # GitHub runners have no GPU: retrieval runs on CPU (~25+ s per rerank), so a full
@@ -64,10 +65,19 @@ jobs:
       - uses: ./.github/actions/prepare-retrieval
 
       - name: Run the golden-set eval (fails below 95%)
+        id: golden
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         # Also writes the result table to the run page (GITHUB_STEP_SUMMARY).
         run: uv run --no-sync python -m part_assistant.eval_agent --max-usd 3 --threshold 0.95
+
+      # Runs even when the golden eval failed (one run reports both), but not when
+      # setup failed before it.
+      - name: Run the prompt-injection test (fails if any attack gets through)
+        if: ${{ !cancelled() && (steps.golden.outcome == 'success' || steps.golden.outcome == 'failure') }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run --no-sync python -m part_assistant.eval_injection --max-usd 0.5
 
       - name: Upload eval result
         if: always()

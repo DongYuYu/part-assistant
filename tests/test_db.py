@@ -71,5 +71,6 @@ def test_reserved_cannot_exceed_on_hand(conn):
 def test_foreign_key_enforced(conn):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO inventory VALUES ('NO-SUCH-PART', 'WH-TPE', 1, 0, ?)", (SEED_TIME,)
+            "INSERT INTO inventory (part_no, warehouse, qty_on_hand, qty_reserved, updated_at)"
+            " VALUES ('NO-SUCH-PART', 'WH-TPE', 1, 0, ?)", (SEED_TIME,)
         )
