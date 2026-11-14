@@ -4,7 +4,7 @@
 # `run-eval` label. To run it again after new commits: remove the label, add it again.
 #
 # GitHub runners have no GPU: retrieval runs on CPU (~25+ s per rerank), so a full
-# run takes 1-2 hours. Models, processed data and chunk embeddings are cached
+# run takes ~1 hour (53 min measured with warm caches). Models, processed data and chunk embeddings are cached
 # (warm-cache.yml builds them on main, so every PR can use them).
 # Each finished case is saved at once (runs/*.partial.jsonl), so a run that times out
 # still uploads what it finished and what it cost.
