@@ -84,7 +84,7 @@ def build_server(tools: Tools, load_retriever: Callable[[], Retriever] | None = 
     async def search_docs(query: str) -> dict:
         if tools.retriever is None and load_retriever is not None:
             tools.retriever = load_retriever()
-        return audited("search_docs", {"query": query}, tools.search_docs(query))
+        return audited("search_docs", {"query": query}, tools.search_docs(query, user))
 
     @mcp.tool(description=DESCRIPTIONS["lookup_part"])
     async def lookup_part(part_no: str) -> dict:

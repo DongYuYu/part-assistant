@@ -14,6 +14,7 @@ import difflib
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from part_assistant import access
 from part_assistant.retrieve import Retriever
 
 TZ = timezone(timedelta(hours=8))  # factory local time (UTC+8)
@@ -41,23 +42,18 @@ class Tools:
 
     # --- tools
 
-    def search_docs(self, query: str) -> dict:
+    def search_docs(self, query: str, user_id: str | None = None) -> dict:
+        """user_id comes from the caller (agent, MCP server), never from the model:
+        the model can not ask for a higher clearance."""
         if self.retriever is None:
             return {"error": "document search is not available"}
-        where = self.retriever.model_filter(query)
+        chunks = self.retriever.chunks
+        clearance = access.clearance_of(self.conn, user_id)
+        allowed = access.visible(chunks, clearance, datetime.now(TZ).date().isoformat())
+        model = self.retriever.model_filter(query)
+        where = (lambda c: allowed(c) and model(c)) if model else allowed
         hits = self.retriever.search(query, k=SEARCH_K, where=where)
-        return {
-            "results": [
-                {
-                    "source": f"{h.chunk.file} p.{h.chunk.page}"
-                    + (f"-{h.chunk.page_end}" if h.chunk.page_end != h.chunk.page else ""),
-                    "model": h.chunk.model,
-                    "section": h.chunk.section,
-                    "text": h.chunk.text.split("\n", 1)[1],  # drop the context line: fields above
-                }
-                for h in hits
-            ]
-        }
+        return {"results": [_result(h.chunk) for h in hits]}
 
     def lookup_part(self, part_no: str) -> dict:
         row = self._part(part_no)
@@ -135,6 +131,21 @@ class Tools:
 # create_ticket has NO idempotency_key and NO approval field: those are not
 # the model's decisions.
 # ---------------------------------------------------------------------------
+
+def _result(c) -> dict:
+    out = {
+        "source": f"{c.file} p.{c.page}" + (f"-{c.page_end}" if c.page_end != c.page else ""),
+        "model": c.model,
+        "section": c.section,
+        "text": c.text.split("\n", 1)[1],  # drop the context line: fields above
+    }
+    # Only on internal documents, so a public datasheet result is exactly as before.
+    if c.revision:
+        out["revision"], out["effective"] = c.revision, c.effective
+    if c.access_level != "public":
+        out["access_level"] = c.access_level
+    return out
+
 
 def _schema(props: dict, required: list[str]) -> dict:
     return {"type": "object", "properties": props, "required": required,

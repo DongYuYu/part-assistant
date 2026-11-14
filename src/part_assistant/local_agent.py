@@ -71,17 +71,18 @@ class LocalAgent:
         self.max_steps = max_steps
         self.chat = chat
 
-    def _run_tool(self, name: str, args: dict) -> dict:
+    def _run_tool(self, name: str, args: dict, user_id: str | None = None) -> dict:
         if name not in READ_ONLY:  # not offered, but a model can still name it
             return {"error": f"{name} is not available in fallback mode"}
         try:
             if name == "search_docs":
-                return self.tools.search_docs(args["query"])
+                return self.tools.search_docs(args["query"], user_id)
             return getattr(self.tools, name)(args["part_no"])
         except Exception as e:  # a broken tool must not crash the loop: tell the model
             return {"error": f"{type(e).__name__}: {e}"}
 
-    def run(self, question: str, session_id: str | None = None) -> AgentResult:
+    def run(self, question: str, session_id: str | None = None,
+            user_id: str | None = None) -> AgentResult:
         messages = [{"role": "system", "content": SYSTEM_LOCAL},
                     {"role": "user", "content": question}]
         result = AgentResult(answer="", stop="max_steps")
@@ -107,7 +108,7 @@ class LocalAgent:
             for c in calls:
                 name, args = c["function"]["name"], c["function"]["arguments"]
                 t1 = time.perf_counter()
-                output = self._run_tool(name, args)
+                output = self._run_tool(name, args, user_id)
                 result.trace.append({"type": "tool", "step": step, "name": name,
                                      "input": args, "is_error": "error" in output,
                                      "ms": round((time.perf_counter() - t1) * 1000)})

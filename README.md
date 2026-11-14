@@ -120,8 +120,7 @@ flowchart TB
 
 **縮小和實際上線的差距**（成本低，但都是企業 AI 系統的必要能力）
 
-- ⬜ **文件版本**：chunk 記錄 `revision` 和生效日期，預設只檢索現行版；黃金樣本加「新舊版數值不同」的題目
-- ⬜ **權限過濾**：每份文件有 `access_level`，在**檢索層**依使用者角色過濾，不靠模型「不要說出來」
+- ✅ **權限過濾和文件版本**：3 份虛構內部文件（internal / confidential，其中一份有 rev A、rev B）；在**檢索層、排名之前**依使用者等級過濾，只用已生效的最新版。public 使用者的檢索結果和加文件前逐位元組相同（[說明](design/access.md)）
 - ✅ **間接 prompt injection**：在假文件裡藏 5 種惡意指令（偷開工單、釣魚連結、洩漏 prompt、改數字、謊稱刪資料），Claude 5/5 擋下，而且會提醒使用者有可疑文件（[說明](design/injection.md)）
 - ✅ **稽核紀錄**：每個問題記下誰問的、呼叫了哪些工具、開了哪張單；資料庫用 trigger 拒絕修改和刪除；工單記下建立者和核准人（[說明](design/audit.md)）
 - ✅ **斷路器**：Claude 連續失敗 3 次後，接下來 60 秒直接走降級，不必每題都等重試失敗（[說明](design/routing.md#斷路器circuit-breaker)）
@@ -162,7 +161,7 @@ uv run pytest -q                          # 跑全部測試（不需要 API key�
 echo "ANTHROPIC_API_KEY=sk-ant-..." > .env      # .env 已在 .gitignore，不會被 commit
 uv run --env-file .env python -m part_assistant.agent "PSU-3200-54V 滿載時的 hold-up time 是多少？"
 uv run --env-file .env python -m part_assistant.agent --show "..."   # 印出每次 API 往返的內容
-uv run --env-file .env python -m part_assistant.agent --user alice "..."   # 記錄是誰問的（預設是系統帳號）
+uv run --env-file .env python -m part_assistant.agent --user alice "..."   # 以 alice 的身分問：稽核紀錄記這個帳號，也只搜這個帳號能看的文件
 uv run python -m part_assistant.audit --user alice                   # 查稽核紀錄，免費
 uv run --env-file .env python -m part_assistant.eval_agent --max-usd 5   # 端到端評測 50 題
 uv run python -m part_assistant.eval_agent --regrade runs/eval-....json  # 改了黃金樣本後重新批改，免費
@@ -309,12 +308,14 @@ part-assistant/
 │   ├── local_agent.py # Claude 無法使用時的降級：Ollama 地端模型，只有唯讀工具
 │   ├── circuit.py     # 斷路器：Claude 連續失敗幾次後，暫時直接走降級
 │   ├── audit.py       # 稽核紀錄：誰問了什麼、呼叫了哪些工具（只能新增）
+│   ├── access.py      # 權限等級和現行版本：搜尋時誰能看到哪些段落
 │   ├── eval_agent.py  # 端到端評測：真的 agent 回答黃金樣本，逐題批改
 │   ├── eval_injection.py # 間接 prompt injection 測試：假文件裡藏惡意指令
 │   ├── mcp_server.py  # 同一組工具包成 MCP server
 │   └── golden.py      # 讀取黃金樣本、比對答案
 ├── data/
 │   ├── sources.toml   # datasheet 清單：網址和 SHA-256（PDF 本身不進 git）
+│   ├── internal/      # 虛構的內部文件（Markdown + TOML 檔頭：版本、生效日、權限等級）
 │   ├── raw/           # 下載的 PDF（被 gitignore）
 │   └── processed/     # SQLite、解析結果（被 gitignore，可以重新產生）
 ├── design/          # 各元件的設計說明（例如 chunking.md）

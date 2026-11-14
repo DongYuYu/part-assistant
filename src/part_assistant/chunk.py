@@ -10,12 +10,17 @@ Rules:
     so a chunk still makes sense alone (and BM25 can match the model name).
   - chunk_id is a hash of the content: same input -> same id, so the embedding stage
     can skip chunks it has already embedded.
+
+Sources: the public datasheets in data/sources.toml (PDF), plus the fictional internal
+documents in data/internal/*.md, whose TOML header (between +++ lines) gives doc_id,
+revision, effective date and access level. See access.py for how those are used.
 """
 
 import hashlib
 import json
 import re
 import sys
+import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -26,6 +31,8 @@ TEXT_TOKENS = 400
 OVERLAP_TOKENS = 60  # ~15% of TEXT_TOKENS
 TABLE_TOKENS = 600  # tables may be bigger than text: splitting them loses context
 RAW_DIR = Path("data/raw")
+INTERNAL_DIR = Path("data/internal")
+LEVELS = ("public", "internal", "confidential")  # same order as access.LEVELS
 OUT_PATH = Path("data/processed/chunks.jsonl")
 
 
@@ -41,10 +48,11 @@ class Chunk:
     section: str
     text: str  # what gets indexed and shown to the model: context line + body
     labels_inferred: bool = False  # table parameter names were guessed
-    # Reserved now so the production-gap work does not force a full re-index later.
-    doc_sha256: str = ""  # which exact PDF this came from
-    revision: str = ""  # datasheet revision, when known
-    access_level: str = "public"
+    doc_sha256: str = ""  # which exact file this came from
+    revision: str = ""  # document revision, when known
+    access_level: str = "public"  # public / internal / confidential (access.py)
+    doc_id: str = ""  # revisions of one document share it; "" = the file is the document
+    effective: str = ""  # YYYY-MM-DD this revision takes effect; "" = always
 
 
 def n_tokens(s: str) -> int:
@@ -169,7 +177,8 @@ def find_footnotes(table: Table, following_texts: list[str]) -> list[str]:
 def make_chunk(meta: dict, kind: str, page: int, page_end: int, section: str, body: str,
                labels_inferred: bool = False) -> Chunk:
     pages = f"p.{page}" if page == page_end else f"p.{page}-{page_end}"
-    context = f"[{meta['vendor']} | {meta['model']} | {meta['file']} | {pages} | {section or '-'}]"
+    name = meta["file"] + (f" rev {meta['revision']}" if meta.get("revision") else "")
+    context = f"[{meta['vendor']} | {meta['model']} | {name} | {pages} | {section or '-'}]"
     text = f"{context}\n{body}"
     chunk_id = hashlib.sha256(f"{meta['file']}\n{text}".encode()).hexdigest()[:16]
     return Chunk(
@@ -177,6 +186,7 @@ def make_chunk(meta: dict, kind: str, page: int, page_end: int, section: str, bo
         kind=kind, page=page, page_end=page_end, section=section, text=text,
         labels_inferred=labels_inferred, doc_sha256=meta.get("doc_sha256", ""),
         revision=meta.get("revision", ""), access_level=meta.get("access_level", "public"),
+        doc_id=meta.get("doc_id", ""), effective=meta.get("effective", ""),
     )
 
 
@@ -221,7 +231,41 @@ def chunk_document(blocks: list[Block], meta: dict) -> list[Chunk]:
     return [c for c in chunks if not (c.chunk_id in seen or seen.add(c.chunk_id))]
 
 
-def build(raw_dir: Path = RAW_DIR, out: Path = OUT_PATH) -> list[Chunk]:
+_FRONT_RE = re.compile(r"\A\+\+\+\n(.*?)\n\+\+\+\n(.*)\Z", re.S)
+REQUIRED = ("doc_id", "title", "revision", "effective", "access_level", "vendor", "model")
+
+
+def load_markdown(path: Path) -> tuple[dict, list[Block]]:
+    """An internal document: TOML header + Markdown body. A wrong header stops the
+    build: a typo in access_level must not quietly make a document public."""
+    m = _FRONT_RE.match(path.read_text(encoding="utf-8"))
+    if not m:
+        raise ValueError(f"{path}: missing +++ TOML header")
+    meta = tomllib.loads(m.group(1))
+    missing = [k for k in REQUIRED if not meta.get(k)]
+    if missing:
+        raise ValueError(f"{path}: header is missing {missing}")
+    if meta["access_level"] not in LEVELS:
+        raise ValueError(f"{path}: access_level must be one of {LEVELS}")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(meta["effective"])):
+        raise ValueError(f"{path}: effective must be a quoted date like \"2026-10-01\"")
+    meta = {k: str(v) for k, v in meta.items()}
+    return {**meta, "file": path.name}, [Block("text", 1, m.group(2))]  # no pages: all p.1
+
+
+def check_revisions(metas: list[dict]) -> None:
+    """Two revisions of one document taking effect on the same day: which one is in
+    force would depend on file order. Refuse instead."""
+    seen: dict[tuple[str, str], str] = {}
+    for meta in metas:
+        key = (meta["doc_id"], meta["effective"])
+        if key in seen:
+            raise ValueError(f"{meta['file']} and {seen[key]}: same doc_id and effective date")
+        seen[key] = meta["file"]
+
+
+def build(raw_dir: Path = RAW_DIR, out: Path = OUT_PATH,
+          internal_dir: Path = INTERNAL_DIR) -> list[Chunk]:
     chunks: list[Chunk] = []
     for src in load_sources():
         path = raw_dir / src["file"]
@@ -232,6 +276,13 @@ def build(raw_dir: Path = RAW_DIR, out: Path = OUT_PATH) -> list[Chunk]:
         doc_chunks = chunk_document(parse_pdf_cached(path), meta)
         n_tables = sum(c.kind == "table" for c in doc_chunks)
         print(f"{src['file']:28} {len(doc_chunks):4} chunks ({n_tables} table)")
+        chunks += doc_chunks
+    docs = [(path, *load_markdown(path)) for path in sorted(internal_dir.glob("*.md"))]
+    check_revisions([meta for _, meta, _ in docs])
+    for path, meta, blocks in docs:
+        doc_chunks = chunk_document(blocks, {**meta, "doc_sha256": sha256_of(path)})
+        print(f"{meta['file']:28} {len(doc_chunks):4} chunks ({meta['access_level']}, "
+              f"{meta['doc_id']} rev {meta['revision']})")
         chunks += doc_chunks
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".part")

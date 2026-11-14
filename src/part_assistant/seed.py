@@ -1,4 +1,4 @@
-"""Generate deterministic fake factory data (parts, inventory, tickets).
+"""Generate deterministic fake factory data (parts, inventory, tickets, users).
 
 Run:  uv run python -m part_assistant.seed
 All values are synthetic. No real company data is used.
@@ -59,6 +59,13 @@ TICKETS = [
 ]
 
 
+# (user_id, role, clearance): who may read the internal documents in data/internal/.
+USERS = [
+    ("alice", "line engineer (demo)", "internal"),
+    ("bob", "supplier quality engineer (demo)", "confidential"),
+]
+
+
 def seed(conn: sqlite3.Connection, rng_seed: int = 42) -> None:
     """Fill an empty database. Same rng_seed -> same data, every time."""
     rng = random.Random(rng_seed)  # local RNG: does not touch global random state
@@ -83,6 +90,7 @@ def seed(conn: sqlite3.Connection, rng_seed: int = 42) -> None:
             " severity, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [(*t, SEED_TIME) for t in TICKETS],
         )
+        conn.executemany("INSERT INTO users (user_id, role, clearance) VALUES (?, ?, ?)", USERS)
 
 
 def main(path: Path = DEFAULT_DB_PATH) -> None:
@@ -90,7 +98,7 @@ def main(path: Path = DEFAULT_DB_PATH) -> None:
     conn = connect(path)
     seed(conn)
     counts = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-              for t in ("parts", "inventory", "tickets")}
+              for t in ("parts", "inventory", "tickets", "users")}
     conn.close()
     print(f"Seeded {path}: {counts}")
 

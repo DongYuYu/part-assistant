@@ -162,7 +162,7 @@ class Agent:
     def _run_tool(self, name: str, args: dict, session_id: str, user_id: str = "") -> dict:
         try:
             if name == "search_docs":
-                return self.tools.search_docs(args["query"])
+                return self.tools.search_docs(args["query"], user_id or None)
             if name == "lookup_part":
                 return self.tools.lookup_part(args["part_no"])
             if name == "check_stock":
@@ -238,7 +238,7 @@ class Agent:
             print(f"\n=== Claude 無法使用（{event['reason']}），改用地端模型 "
                   f"{self.fallback.model}", flush=True)
         try:
-            local = self.fallback.run(question, session_id)
+            local = self.fallback.run(question, session_id, partial.user_id)
             local.answer = DEGRADED_BANNER + local.answer
         except Exception as e:  # Ollama is down too: say so, do not crash
             local = AgentResult(answer="（雲端和地端模型都暫時無法使用，請稍後再試）",

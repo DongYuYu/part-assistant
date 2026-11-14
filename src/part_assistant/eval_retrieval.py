@@ -72,7 +72,9 @@ def main() -> None:
     ap.add_argument("--show-misses", action="store_true", help="list cases not ranked #1")
     args = ap.parse_args()
 
-    chunks = load_chunks()
+    # The golden questions are about the public datasheets, asked as a public user:
+    # internal documents are invisible to that user, so they are not candidates here.
+    chunks = [c for c in load_chunks() if c.access_level == "public"]
     cases = [c for c in load_cases() if c.sources]
     reranker = None if args.no_rerank else Reranker()
     print(f"{len(chunks)} chunks, {len(cases)} cases with a source page\n")

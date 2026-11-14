@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS tickets (
            OR (trim(coalesce(approved_by, '')) != '' AND approved_at IS NOT NULL))
 );
 
+-- Who may read which documents (access.py). A user not listed here is 'public'.
+CREATE TABLE IF NOT EXISTS users (
+    user_id   TEXT PRIMARY KEY CHECK (trim(user_id) != ''),
+    role      TEXT NOT NULL,
+    clearance TEXT NOT NULL CHECK (clearance IN ('public', 'internal', 'confidential'))
+);
+
 -- Who asked what, which tools ran, what changed. Append-only: the triggers refuse
 -- UPDATE and DELETE, so a bug or a careless script can not rewrite history.
 CREATE TABLE IF NOT EXISTS audit_log (
