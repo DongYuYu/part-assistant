@@ -4,7 +4,8 @@
 # `run-eval` label. To run it again after new commits: remove the label, add it again.
 #
 # GitHub runners have no GPU: retrieval runs on CPU (~25+ s per rerank), so a full
-# run takes 1-2 hours. Models, processed data and chunk embeddings are cached.
+# run takes 1-2 hours. Models, processed data and chunk embeddings are cached
+# (warm-cache.yml builds them on main, so every PR can use them).
 # Each finished case is saved at once (runs/*.partial.jsonl), so a run that times out
 # still uploads what it finished and what it cost.
 #
@@ -57,54 +58,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
-      - name: Restore models
-        id: models
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: /home/runner/.cache/huggingface
-          key: hf-${{ hashFiles('src/part_assistant/retrieve.py') }}
-
-      - name: Restore processed data
-        id: data
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: |
-            data/raw
-            data/processed/parsed
-            data/processed/emb
-          key: data-${{ hashFiles('data/sources.toml', 'src/part_assistant/download.py', 'src/part_assistant/parse.py', 'src/part_assistant/chunk.py', 'src/part_assistant/retrieve.py') }}
-          restore-keys: data-  # an older cache still helps: parse/embedding caches are content-keyed
-
-      - name: Download datasheets and build chunks
-        run: |
-          uv run --no-sync python -m part_assistant.download
-          uv run --no-sync python -m part_assistant.chunk
-
-      - name: Load models and embed chunks (fills both caches)
-        run: |
-          uv run --no-sync python -c "
-          from part_assistant.chunk import load_chunks
-          from part_assistant.retrieve import Embedder, Reranker
-          e = Embedder(); e.embed_chunks(load_chunks()); Reranker()
-          print('embedded', e.n_embedded, 'new chunks')"
-
-      # Saved BEFORE the eval, so a failing score still keeps the caches for next time.
-      - name: Save models
-        if: steps.models.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: /home/runner/.cache/huggingface
-          key: ${{ steps.models.outputs.cache-primary-key }}
-
-      - name: Save processed data
-        if: steps.data.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: |
-            data/raw
-            data/processed/parsed
-            data/processed/emb
-          key: ${{ steps.data.outputs.cache-primary-key }}
+      # Same steps and cache keys as warm-cache.yml. Caches made on main are found
+      # here; a cache miss is built and saved BEFORE the eval, so a failing score
+      # still keeps the caches for next time.
+      - uses: ./.github/actions/prepare-retrieval
 
       - name: Run the golden-set eval (fails below 95%)
         env:

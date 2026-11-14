@@ -1,0 +1,62 @@
+# Shared by eval.yml and warm-cache.yml, so both use EXACTLY the same cache keys
+# (a warm-up that saves under a different key than the eval reads is useless).
+#
+# Restores models + processed data, builds whatever is missing, and saves the caches.
+# Needs: dependencies installed (uv sync) and HF_HOME set by the calling job.
+name: Prepare retrieval
+description: Download datasheets, build chunks, load models, embed chunks (cached)
+
+runs:
+  using: composite
+  steps:
+    - name: Restore models
+      id: models
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: /home/runner/.cache/huggingface
+        key: hf-${{ hashFiles('src/part_assistant/retrieve.py') }}
+        restore-keys: hf-  # retrieve.py changed: the old models are most likely still right
+
+    - name: Restore processed data
+      id: data
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: |
+          data/raw
+          data/processed/parsed
+          data/processed/emb
+        key: data-${{ hashFiles('data/sources.toml', 'src/part_assistant/download.py', 'src/part_assistant/parse.py', 'src/part_assistant/chunk.py', 'src/part_assistant/retrieve.py') }}
+        restore-keys: data-  # an older cache still helps: parse/embedding caches are content-keyed
+
+    - name: Download datasheets and build chunks
+      shell: bash
+      run: |
+        uv run --no-sync python -m part_assistant.download
+        uv run --no-sync python -m part_assistant.chunk
+
+    - name: Load models and embed chunks
+      shell: bash
+      run: |
+        uv run --no-sync python -c "
+        from part_assistant.chunk import load_chunks
+        from part_assistant.retrieve import Embedder, Reranker
+        e = Embedder(); e.embed_chunks(load_chunks()); Reranker()
+        print('embedded', e.n_embedded, 'new chunks')"
+
+    # cache-hit is 'true' only for an exact key match; a restore-keys match saves anew.
+    - name: Save models
+      if: steps.models.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: /home/runner/.cache/huggingface
+        key: ${{ steps.models.outputs.cache-primary-key }}
+
+    - name: Save processed data
+      if: steps.data.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: |
+          data/raw
+          data/processed/parsed
+          data/processed/emb
+        key: ${{ steps.data.outputs.cache-primary-key }}

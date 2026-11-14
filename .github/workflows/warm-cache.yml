@@ -1,0 +1,56 @@
+# Builds the model + data caches ON MAIN. Free: no API calls, no secret.
+#
+# Why: a run can only read caches made on its own branch or on the default branch
+# (main). Caches made by a PR's eval are invisible to every other PR, so without this
+# each new PR would download 4 GB of models and embed all chunks again (~30 min on CPU).
+#
+# Runs when something that changes the caches lands on main, or by hand
+# (Actions tab > Warm caches > Run workflow).
+name: Warm caches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - data/sources.toml
+      - src/part_assistant/download.py
+      - src/part_assistant/parse.py
+      - src/part_assistant/chunk.py
+      - src/part_assistant/retrieve.py
+      - uv.lock
+      - .github/actions/prepare-retrieval/**
+      - .github/workflows/warm-cache.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-cache
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to a new OS version
+    timeout-minutes: 60
+    env:
+      HF_HOME: /home/runner/.cache/huggingface
+    steps:
+      # torch + CUDA (~7 GB venv) + models (~4.5 GB) do not fit the default free disk.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.5"
+          python-version: "3.12"
+          enable-cache: false  # the torch + CUDA wheels would fill the 10 GB cache quota
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - uses: ./.github/actions/prepare-retrieval
