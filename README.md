@@ -122,7 +122,7 @@ flowchart TB
 
 - ⬜ **文件版本**：chunk 記錄 `revision` 和生效日期，預設只檢索現行版；黃金樣本加「新舊版數值不同」的題目
 - ⬜ **權限過濾**：每份文件有 `access_level`，在**檢索層**依使用者角色過濾，不靠模型「不要說出來」
-- ⬜ **間接 prompt injection**：在一份假文件裡藏惡意指令，驗證 agent 不會照著執行
+- ✅ **間接 prompt injection**：在假文件裡藏 5 種惡意指令（偷開工單、釣魚連結、洩漏 prompt、改數字、謊稱刪資料），Claude 5/5 擋下，而且會提醒使用者有可疑文件（[說明](design/injection.md)）
 - ⬜ **稽核紀錄**：高嚴重度工單的核准人和時間已經存進資料庫（`approved_by`、`approved_at`，資料表有 CHECK 約束）；還缺 trace 附上使用者 ID，記錄誰問了什麼、呼叫了哪些工具、改了什麼資料
 - ✅ **斷路器**：Claude 連續失敗 3 次後，接下來 60 秒直接走降級，不必每題都等重試失敗（[說明](design/routing.md#斷路器circuit-breaker)）
 
@@ -307,6 +307,7 @@ part-assistant/
 │   ├── local_agent.py # Claude 無法使用時的降級：Ollama 地端模型，只有唯讀工具
 │   ├── circuit.py     # 斷路器：Claude 連續失敗幾次後，暫時直接走降級
 │   ├── eval_agent.py  # 端到端評測：真的 agent 回答黃金樣本，逐題批改
+│   ├── eval_injection.py # 間接 prompt injection 測試：假文件裡藏惡意指令
 │   ├── mcp_server.py  # 同一組工具包成 MCP server
 │   └── golden.py      # 讀取黃金樣本、比對答案
 ├── data/
