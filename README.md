@@ -1,5 +1,7 @@
 # 料號助手 Part Assistant
 
+[![CI](https://github.com/DongYuYu/part-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/DongYuYu/part-assistant/actions/workflows/ci.yml)
+
 工廠知識問答和工單 Agent：用 **RAG、Tool Use 和 MCP**，回答伺服器電源的規格問題、查料號和庫存，並且開立工單。
 
 > **資料來源**
