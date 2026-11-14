@@ -1,0 +1,17 @@
+# Optional: give the containers the NVIDIA GPU (needs the NVIDIA Container Toolkit).
+#   docker compose -f compose.yaml -f compose.gpu.yaml up
+# retrieve.py uses CUDA automatically when torch sees a GPU; Ollama does too.
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  ollama: *gpu
+  prepare: *gpu
+  app: *gpu

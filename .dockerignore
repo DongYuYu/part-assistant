@@ -1,0 +1,16 @@
+# Never in the image: the API key, local data, caches, private notes.
+.env
+.env.*
+.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+data/raw
+data/processed
+traces
+runs
+docs
+reference
+CLAUDE.md
+tests

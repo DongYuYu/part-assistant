@@ -116,7 +116,7 @@ flowchart TB
 - ✅ MCP server（官方 Python SDK 2.x），可接 Claude Code / Claude Desktop
 - ✅ GitHub Actions：每次 push / PR 跑 lint 和測試；PR 加上 `run-eval` 標籤時跑端到端評測，低於 95% 就失敗
 - ✅ 模型路由：Claude 無法使用時降級到地端模型（Ollama qwen3:4b，只給唯讀工具）；依題型分流量過不划算，所以不做（[數字](design/routing.md)）
-- ⬜ Docker Compose 一鍵啟動
+- ✅ Docker Compose 一鍵啟動（prepare、app、ollama；資料和模型放在 volume）
 
 **縮小和實際上線的差距**（成本低，但都是企業 AI 系統的必要能力）
 
@@ -171,6 +171,35 @@ uv run python -m part_assistant.eval_agent --regrade runs/eval-....json  # 改�
 **當成 MCP server 用**：請看下面的[接到你的 MCP host](#接到你的-mcp-host)。
 
 > 用到真實 PDF 的測試，第一次會比較慢（版面分析模型跑在 CPU 上）。沒有下載 PDF 時，這些測試會自動跳過。
+
+### 用 Docker 啟動
+
+不用裝 Python 和 uv，只需要 Docker（Compose v2.24 以上）。
+
+```bash
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env   # 執行時才讀，不會被包進映像檔
+docker compose up -d                          # 建置映像檔；下載 datasheet、檢索模型、地端模型；計算 embedding
+docker compose run --rm app ask "PSU-3200-54V 滿載時的 hold-up time 是多少？"
+```
+
+| 服務 | 做什麼 |
+|---|---|
+| `prepare` | 下載 datasheet、建立示範資料庫（已存在就不動）、切段、下載檢索模型、計算 embedding，完成後結束 |
+| `ollama`、`ollama-pull` | 降級用的地端模型（qwen3:4b） |
+| `app` | 回答問題：`ask "問題"`；也可以 `mcp`（MCP server）、`eval`（端到端評測，會花錢）、`bash` |
+
+實測（WSL2、容器只用 CPU）：
+
+| 步驟 | 時間 | 說明 |
+|---|---|---|
+| 建置映像檔 | 約 6 分鐘 | 映像檔 4.3 GB（解壓後 12.3 GB，大部分是 CUDA 版的 torch） |
+| 第一次 `up` | 約 16 分鐘 | 下載約 7 GB 的模型，用 CPU 算 696 個 chunk 的 embedding |
+| 之後再 `up` | 約 15 秒 | 資料和模型都在 volume 裡，不會重新下載或重算 |
+| 一題降級回答 | 約 1.5–2 分鐘 | 地端模型在 CPU 上很慢；有 GPU 時約 25 秒 |
+
+- **資料存在 Docker volume**：重建映像檔不會遺失資料，開過的工單也還在。`docker compose down -v` 會連 volume 一起刪掉。
+- **`app` 不連 Hugging Face**（`HF_HUB_OFFLINE=1`）：模型已經由 `prepare` 下載好，啟動時不必上網檢查更新。
+- **用 GPU**：裝好 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) 後執行 `docker compose -f compose.yaml -f compose.gpu.yaml up -d`（尚未實測）。
 
 ---
 
@@ -284,6 +313,10 @@ part-assistant/
 ├── design/          # 各元件的設計說明（例如 chunking.md）
 ├── eval/
 │   └── golden.toml    # 黃金樣本 50 題
+├── Dockerfile         # 映像檔：只有 Python、鎖定的套件和程式碼，資料放 volume
+├── compose.yaml       # docker compose：prepare、app、ollama
+├── compose.gpu.yaml   # 選用：讓容器使用 NVIDIA GPU
+├── docker/entrypoint.sh  # 容器的指令：prepare / ask / mcp / eval
 ├── .mcp.json          # Claude Code 的 MCP 設定
 └── tests/             # pytest
 ```

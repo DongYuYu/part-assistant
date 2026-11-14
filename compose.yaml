@@ -1,0 +1,71 @@
+# One command to set everything up:
+#
+#   docker compose up            # first time: ~4.5 GB of models + ~2.5 GB local model
+#   docker compose run --rm app ask "PSU-3200-54V 滿載時的 hold-up time 是多少？"
+#
+# With an NVIDIA GPU (needs the NVIDIA Container Toolkit):
+#   docker compose -f compose.yaml -f compose.gpu.yaml up
+#
+# The API key comes from .env at run time (never baked into the image).
+
+x-app: &app
+  build: .
+  image: part-assistant:local
+  volumes:
+    - raw:/app/data/raw              # downloaded datasheets
+    - processed:/app/data/processed  # database, parsed PDFs, chunks, embeddings
+    - traces:/app/traces
+    - runs:/app/runs
+    - models:/cache                  # bge-m3, reranker, layout model
+
+services:
+  ollama:  # local model for the fallback when Claude is unavailable
+    image: ollama/ollama:0.34.2
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  ollama-pull:  # downloads the local model once, then exits
+    image: ollama/ollama:0.34.2
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "${PART_ASSISTANT_LOCAL_MODEL:-qwen3:4b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  prepare:  # data + retrieval models, then exits
+    <<: *app
+    command: ["prepare"]
+    restart: "no"
+
+  app:  # not started by `up`: use `docker compose run --rm app ask "..."`
+    <<: *app
+    profiles: ["cli"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      PART_ASSISTANT_LOCAL_MODEL: ${PART_ASSISTANT_LOCAL_MODEL:-qwen3:4b}
+      # `prepare` downloaded the models: never ask the HF Hub again. Without this,
+      # every start checks for updates online (once took minutes, rate limited).
+      HF_HUB_OFFLINE: "1"
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+
+volumes:
+  raw:
+  processed:
+  traces:
+  runs:
+  models:
+  ollama:
