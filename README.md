@@ -124,7 +124,7 @@ flowchart TB
 - ⬜ **權限過濾**：每份文件有 `access_level`，在**檢索層**依使用者角色過濾，不靠模型「不要說出來」
 - ⬜ **間接 prompt injection**：在一份假文件裡藏惡意指令，驗證 agent 不會照著執行
 - ⬜ **稽核紀錄**：高嚴重度工單的核准人和時間已經存進資料庫（`approved_by`、`approved_at`，資料表有 CHECK 約束）；還缺 trace 附上使用者 ID，記錄誰問了什麼、呼叫了哪些工具、改了什麼資料
-- ⬜ **斷路器**：降級已完成（見上）；還缺 Claude 持續故障時，連續失敗幾次就直接走降級一段時間，不必每題都等重試失敗
+- ✅ **斷路器**：Claude 連續失敗 3 次後，接下來 60 秒直接走降級，不必每題都等重試失敗（[說明](design/routing.md#斷路器circuit-breaker)）
 
 **第二階段：推論閘道**
 
@@ -305,6 +305,7 @@ part-assistant/
 │   ├── tools.py       # 4 個工具和 JSON schema；安全規則寫在程式裡
 │   ├── agent.py       # agent 迴圈：步數和成本上限、trace、高嚴重度要人工確認
 │   ├── local_agent.py # Claude 無法使用時的降級：Ollama 地端模型，只有唯讀工具
+│   ├── circuit.py     # 斷路器：Claude 連續失敗幾次後，暫時直接走降級
 │   ├── eval_agent.py  # 端到端評測：真的 agent 回答黃金樣本，逐題批改
 │   ├── mcp_server.py  # 同一組工具包成 MCP server
 │   └── golden.py      # 讀取黃金樣本、比對答案
@@ -476,6 +477,7 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 - **用黃金樣本量過**：qwen3:4b（開思考，RTX 5070 Laptop）29/48，Claude 48/48。
 - **依題型分流不划算**：地端答得好的題型（拒答、查庫存、追問）只佔 Claude 成本的 20%，所以平常全部交給 Claude。
 - **只有 Claude 暫時無法使用才降級**（連不上、5xx、429）。400、401 是自己的 bug，降級會把它藏起來，所以直接報錯。降級時只給唯讀工具，回答加上警告。
+- **斷路器**：連續失敗 3 次後，60 秒內直接降級。實測連不上時 SDK 約 1.4 秒就放棄，斷路器省得不多；真正要防的是逾時（預設 600 秒 × 3 次）。狀態存成檔案，因為 CLI 每題都是新的程序。
 - **量測時抓到批改器的盲點**：推理過程漏進回答、照抄 `(file p.N)` 範本，回答裡的數字是對的，所以關鍵字檢查抓不到；批改器因此加了格式檢查。
 
 > 完整數字和常見問題見 [design/routing.md](design/routing.md)。

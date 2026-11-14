@@ -141,10 +141,11 @@ def idempotency_key(session_id: str, part_no: str, severity: str) -> str:
 class Agent:
     def __init__(self, tools: Tools, client=None, model: str = MODEL,
                  max_steps: int = MAX_STEPS, max_cost_usd: float = MAX_COST_USD,
-                 show: bool = False, fallback=None):
+                 show: bool = False, fallback=None, breaker=None):
         if client is None:  # tests pass a fake client
             client = anthropic.Anthropic()  # key from ANTHROPIC_API_KEY / .env, never in code
         self.fallback = fallback  # a LocalAgent, or None: errors are raised
+        self.breaker = breaker    # a CircuitBreaker, or None: always try Claude first
         self.client = client
         self.tools = tools
         self.model = model
@@ -174,21 +175,30 @@ class Agent:
     def run(self, question: str, session_id: str | None = None) -> AgentResult:
         session_id = session_id or uuid.uuid4().hex
         result = AgentResult(answer="", stop="max_steps")
+        if self.fallback and self.breaker and not self.breaker.allow():
+            # Claude failed several times in a row: do not wait for its retries again.
+            reason = f"circuit open ({self.breaker.seconds_left()}s left)"
+            return self._fall_back(question, session_id, result, reason)
         try:
             self._loop(question, session_id, result)
+            if self.breaker:
+                self.breaker.record_success()
         except FALLBACK_ERRORS as e:
+            if self.breaker:
+                self.breaker.record_failure()
             if self.fallback is None:
                 raise
-            result = self._fall_back(question, session_id, result, e)
+            reason = f"{type(e).__name__}: {e}"
+            result = self._fall_back(question, session_id, result, reason)
         if result.pending_ticket and result.stop == "done":
             result.stop = "needs_confirmation"
         return result
 
     def _fall_back(self, question: str, session_id: str, partial: AgentResult,
-                   error: Exception) -> AgentResult:
+                   reason: str) -> AgentResult:
         """Start the question again on the local model. What Claude already did is kept:
         its tool calls stay in the result (a ticket it wrote stays recorded)."""
-        event = {"type": "fallback", "reason": f"{type(error).__name__}: {error}"[:300],
+        event = {"type": "fallback", "reason": reason[:300],
                  "to": self.fallback.model}
         if self.show:
             print(f"\n=== Claude 無法使用（{event['reason']}），改用地端模型 "
@@ -302,12 +312,15 @@ def save_trace(question: str, result: AgentResult, trace_dir: Path = TRACE_DIR) 
 
 def build_agent(show: bool = False) -> Agent:
     from part_assistant.chunk import load_chunks
+    from part_assistant.circuit import STATE_FILE, CircuitBreaker
     from part_assistant.db import connect
     from part_assistant.local_agent import LocalAgent
     from part_assistant.retrieve import Embedder, Reranker, Retriever
 
     tools = Tools(connect(), Retriever(load_chunks(), Embedder(), Reranker()))
-    return Agent(tools, show=show, fallback=LocalAgent(tools))  # same tools, same retriever
+    return Agent(tools, show=show,
+                 fallback=LocalAgent(tools),  # same tools, same retriever
+                 breaker=CircuitBreaker(STATE_FILE))  # shared by every CLI run
 
 
 def main() -> None:
