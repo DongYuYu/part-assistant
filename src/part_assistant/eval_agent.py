@@ -71,6 +71,21 @@ def cites(answer: str, source: dict) -> bool:
     return False
 
 
+_THINK_TAG = re.compile(r"</?think>", re.IGNORECASE)
+_TEMPLATE_CITATION = re.compile(r"[(（]\s*file\s+p\.", re.IGNORECASE)  # "(file p.1)" copied as is
+
+
+def check_format(answer: str) -> list[str]:
+    """Mistakes Claude never made but small local models do. The keyword checks can not see
+    them: a leaked reasoning text still contains the right numbers."""
+    problems = []
+    if _THINK_TAG.search(answer):
+        problems.append("reasoning leaked into the answer (<think> tag)")
+    if _TEMPLATE_CITATION.search(answer):
+        problems.append("citation copies the prompt template '(file p.N)'")
+    return problems
+
+
 def check_tools(result: AgentResult, case: Case) -> list[str]:
     called = [c["name"] for c in result.tool_calls]
     problems = [f"did not call {t}" for t in case.tools if t not in called]
@@ -86,7 +101,8 @@ def check_tools(result: AgentResult, case: Case) -> list[str]:
 def grade(case: Case, result: AgentResult, tickets_before: int, tickets_after: int) -> list[str]:
     """Return the problems with this answer ([] = pass)."""
     answer = result.answer
-    problems = check_answer_text(answer, case) + check_tools(result, case)
+    problems = (check_answer_text(answer, case) + check_format(answer)
+                + check_tools(result, case))
 
     if case.expect == "answer":
         if result.stop != "done":

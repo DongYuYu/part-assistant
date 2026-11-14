@@ -5,7 +5,7 @@ from test_agent import FakeClient, text, tool_use
 
 from part_assistant.agent import Agent
 from part_assistant.db import connect, init_schema
-from part_assistant.eval_agent import cites, run_eval, summarize
+from part_assistant.eval_agent import check_format, cites, run_eval, summarize
 from part_assistant.golden import load_cases
 from part_assistant.seed import seed
 from part_assistant.tools import Tools
@@ -38,6 +38,30 @@ def run(tools, case_id, *responses, max_usd=5.0):
 ])
 def test_cites(answer, ok):
     assert cites(answer, SRC) is ok
+
+
+# --- format (seen with a local 4B model)
+
+@pytest.mark.parametrize("answer,problem", [
+    ("54 VDC（bel-tec3200-54.pdf p.1）", None),
+    ("Okay, let's see...\n</think>\n\n54 VDC（bel-tec3200-54.pdf p.1）", "reasoning leaked"),
+    ("<think>hmm</think>54 VDC（bel-tec3200-54.pdf p.1）", "reasoning leaked"),
+    ("54 VDC (file p.1)", "prompt template"),
+    ("54 VDC（ file p.1）", "prompt template"),
+    ("see the profile p.1 of bel-tec3200-54.pdf", None),  # 'file' inside a word is fine
+])
+def test_check_format(answer, problem):
+    problems = check_format(answer)
+    if problem is None:
+        assert problems == []
+    else:
+        assert len(problems) == 1 and problem in problems[0]
+
+
+def test_leaked_reasoning_fails_even_with_the_right_facts(tools):
+    g = run(tools, "multi-01", tool_use(LOOKUP), tool_use(SEARCH),
+            text("The user asks... so 9 ms.\n</think>\n9 ms（bel-tec3200-54.pdf p.2）"))
+    assert not g.passed and any("reasoning leaked" in p for p in g.problems)
 
 
 # --- grading each kind of case
