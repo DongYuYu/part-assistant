@@ -375,7 +375,7 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 | `warm-cache.yml` | main 上的解析、切段、檢索程式或 `uv.lock` 有變動時，或手動觸發 | 下載模型、算好 embedding，把快取建在 main 上，讓**每個 PR** 的評測都讀得到（PR 自己建的快取，別的 PR 讀不到）。不呼叫 API | 免費 |
 
 - 為什麼要加標籤才跑：每次評測都要花錢，改文件或 README 不需要跑。新的 commit 不會自動重跑，要移除標籤再加回去。
-- GitHub 的機器沒有 GPU，reranker 跑在 CPU 上。實測（2026-11-14，ubuntu-24.04 runner）：快取命中時準備資料只要約 20 秒，50 題評測約需 48 分鐘（2845 秒），整個 job 53 分鐘，48/48，$1.39。沒有快取時，光下載模型和算 embedding 就要再多約 40 分鐘。
+- GitHub 的機器沒有 GPU，reranker 跑在 CPU 上。實測（2026-11-14，ubuntu-24.04 runner）：快取命中時準備資料只要約 20 秒，50 題評測約需 48 分鐘，整個 job 53 分鐘，48/48，$1.39。沒有快取時，光下載模型和算 embedding 就要再多約 40 分鐘。
 - API key 只放在 repo 的 Secrets（`ANTHROPIC_API_KEY`）。觸發用 `pull_request` 而不是 `pull_request_target`，所以從 fork 來的 PR 拿不到 key；第三方 action 都鎖定 commit SHA。
 
 ---
