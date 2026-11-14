@@ -17,6 +17,7 @@ from pathlib import Path
 
 import anthropic
 
+from part_assistant import audit
 from part_assistant.tools import TOOL_SCHEMAS, Tools
 
 MODEL = "claude-opus-5-5"
@@ -70,6 +71,8 @@ class AgentResult:
     trace: list[dict] = field(default_factory=list)
     cost_usd: float = 0.0
     degraded: bool = False  # answered by the local fallback model
+    session_id: str = ""
+    user_id: str = ""  # who asked (audit); see audit.current_user
 
 
 def call_cost(model: str, usage) -> float:
@@ -141,7 +144,7 @@ def idempotency_key(session_id: str, part_no: str, severity: str) -> str:
 class Agent:
     def __init__(self, tools: Tools, client=None, model: str = MODEL,
                  max_steps: int = MAX_STEPS, max_cost_usd: float = MAX_COST_USD,
-                 show: bool = False, fallback=None, breaker=None):
+                 show: bool = False, fallback=None, breaker=None, channel: str = "cli"):
         if client is None:  # tests pass a fake client
             client = anthropic.Anthropic()  # key from ANTHROPIC_API_KEY / .env, never in code
         self.fallback = fallback  # a LocalAgent, or None: errors are raised
@@ -152,10 +155,11 @@ class Agent:
         self.max_steps = max_steps
         self.max_cost_usd = max_cost_usd
         self.show = show  # print every request/response (for learning and demos)
+        self.channel = channel  # cli | eval: written to the audit log
 
     # --- tools
 
-    def _run_tool(self, name: str, args: dict, session_id: str) -> dict:
+    def _run_tool(self, name: str, args: dict, session_id: str, user_id: str = "") -> dict:
         try:
             if name == "search_docs":
                 return self.tools.search_docs(args["query"])
@@ -165,16 +169,46 @@ class Agent:
                 return self.tools.check_stock(args["part_no"])
             if name == "create_ticket":
                 key = idempotency_key(session_id, args["part_no"], args["severity"])
-                return self.tools.create_ticket(**args, idempotency_key=key)
+                return self.tools.create_ticket(**args, idempotency_key=key,
+                                                created_by=user_id or None)
             return {"error": f"unknown tool {name!r}"}
         except Exception as e:  # a broken tool must not crash the loop: tell the model
             return {"error": f"{type(e).__name__}: {e}"}
 
     # --- loop
 
-    def run(self, question: str, session_id: str | None = None) -> AgentResult:
-        session_id = session_id or uuid.uuid4().hex
-        result = AgentResult(answer="", stop="max_steps")
+    def run(self, question: str, session_id: str | None = None,
+            user_id: str | None = None) -> AgentResult:
+        result = AgentResult(answer="", stop="max_steps",
+                             session_id=session_id or uuid.uuid4().hex,
+                             user_id=audit.current_user(user_id))
+        error = None
+        try:
+            result = self._run(question, result)
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"[:300]
+            raise
+        finally:  # a failed question is audited too: tools may already have run
+            self._audit(question, result, error)
+        return result
+
+    def _audit(self, question: str, result: AgentResult, error: str | None) -> None:
+        if self.tools.conn is None:  # retrieval-only tools (dry runs): no database
+            return
+        detail = {
+            "question": question, "answer": result.answer, "stop": result.stop,
+            "degraded": result.degraded, "cost_usd": round(result.cost_usd, 6),
+            "tools": [{"name": c["name"], "input": c["input"],
+                       "result": audit.summarize(c["name"], c["output"])}
+                      for c in result.tool_calls],
+        }
+        if error:
+            detail["error"] = error
+        audit.record(self.tools.conn, result.user_id, result.session_id, self.channel,
+                     "ask", detail)
+
+    def _run(self, question: str, result: AgentResult) -> AgentResult:
+        session_id = result.session_id
         if self.fallback and self.breaker and not self.breaker.allow():
             # Claude failed several times in a row: do not wait for its retries again.
             reason = f"circuit open ({self.breaker.seconds_left()}s left)"
@@ -215,6 +249,7 @@ class Agent:
         local.trace = partial.trace + [event] + local.trace
         local.cost_usd += partial.cost_usd
         local.pending_ticket = partial.pending_ticket  # the local model can not make one
+        local.session_id, local.user_id = partial.session_id, partial.user_id
         return local
 
     def _loop(self, question: str, session_id: str, result: AgentResult) -> None:
@@ -266,7 +301,7 @@ class Agent:
             tool_results = []
             for block in (b for b in response.content if b.type == "tool_use"):
                 t1 = time.perf_counter()
-                output = self._run_tool(block.name, block.input, session_id)
+                output = self._run_tool(block.name, block.input, session_id, result.user_id)
                 result.trace.append({
                     "type": "tool", "step": step, "name": block.name, "input": block.input,
                     "ms": round((time.perf_counter() - t1) * 1000),
@@ -278,7 +313,8 @@ class Agent:
                     result.pending_ticket = {**output["draft"],
                                              "idempotency_key": idempotency_key(
                                                  session_id, block.input["part_no"],
-                                                 block.input["severity"])}
+                                                 block.input["severity"]),
+                                             "created_by": result.user_id}
                 tool_results.append({
                     "type": "tool_result", "tool_use_id": block.id,
                     "content": json.dumps(output, ensure_ascii=False),
@@ -294,16 +330,23 @@ class Agent:
         else:
             result.answer = "（已達步數上限，停止處理）"
 
-    def approve(self, pending: dict, approver: str) -> dict:
+    def approve(self, pending: dict, approver: str, user_id: str | None = None,
+                session_id: str = "") -> dict:
         """A PERSON approved a high-severity draft: write it. The model is not involved,
         and the same idempotency key means approving twice still gives one ticket."""
-        return self.tools.create_ticket(**pending, approved_by=approver)
+        out = self.tools.create_ticket(**pending, approved_by=approver)
+        audit.record(self.tools.conn, audit.current_user(user_id), session_id, self.channel,
+                     "approve", {"approver": approver, "requested_by": pending.get("created_by"),
+                                 "part_no": pending.get("part_no"),
+                                 **audit.summarize("create_ticket", out)})
+        return out
 
 
 def save_trace(question: str, result: AgentResult, trace_dir: Path = TRACE_DIR) -> Path:
     trace_dir.mkdir(parents=True, exist_ok=True)
     path = trace_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}.json"
     path.write_text(json.dumps({
+        "user_id": result.user_id, "session_id": result.session_id,
         "question": question, "answer": result.answer, "stop": result.stop,
         "degraded": result.degraded, "cost_usd": round(result.cost_usd, 6), "trace": result.trace,
     }, ensure_ascii=False, indent=2))
@@ -313,11 +356,13 @@ def save_trace(question: str, result: AgentResult, trace_dir: Path = TRACE_DIR) 
 def build_agent(show: bool = False) -> Agent:
     from part_assistant.chunk import load_chunks
     from part_assistant.circuit import STATE_FILE, CircuitBreaker
-    from part_assistant.db import connect
+    from part_assistant.db import connect, init_schema
     from part_assistant.local_agent import LocalAgent
     from part_assistant.retrieve import Embedder, Reranker, Retriever
 
-    tools = Tools(connect(), Retriever(load_chunks(), Embedder(), Reranker()))
+    conn = connect()
+    init_schema(conn)  # an older database gets the new columns and the audit table
+    tools = Tools(conn, Retriever(load_chunks(), Embedder(), Reranker()))
     return Agent(tools, show=show,
                  fallback=LocalAgent(tools),  # same tools, same retriever
                  breaker=CircuitBreaker(STATE_FILE))  # shared by every CLI run
@@ -326,19 +371,26 @@ def build_agent(show: bool = False) -> Agent:
 def main() -> None:
     args = sys.argv[1:]
     show = "--show" in args
+    user = None
+    if "--user" in args:  # --user NAME: who is asking (audit log); see audit.current_user
+        i = args.index("--user")
+        user = args[i + 1] if i + 1 < len(args) else None
+        del args[i:i + 2]
     question = " ".join(a for a in args if a != "--show") or "TEC3200 在 50% 負載時的效率是多少？"
     agent = build_agent(show=show)
-    result = agent.run(question)
+    result = agent.run(question, user_id=user)
     for call in result.tool_calls:
         print(f"  [tool] {call['name']}({json.dumps(call['input'], ensure_ascii=False)})")
     print(f"\n{result.answer}\n")
     if result.pending_ticket:
         ok = input("這張高嚴重度工單要建立嗎？輸入你的名字確認，直接 Enter 取消：").strip()
         if ok:
-            print(agent.approve(result.pending_ticket, approver=ok))
+            print(agent.approve(result.pending_ticket, approver=ok,
+                                user_id=result.user_id, session_id=result.session_id))
     path = save_trace(question, result)
     stop = result.stop + (" degraded" if result.degraded else "")
-    print(f"[{stop}] {len(result.trace)} trace events, ${result.cost_usd:.4f} -> {path}")
+    print(f"[{stop}] user {result.user_id}, {len(result.trace)} trace events, "
+          f"${result.cost_usd:.4f} -> {path}")
 
 
 if __name__ == "__main__":

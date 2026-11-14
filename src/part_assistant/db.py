@@ -37,18 +37,38 @@ CREATE TABLE IF NOT EXISTS tickets (
     severity        TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high')),
     status          TEXT NOT NULL CHECK (status IN ('pending_approval', 'open', 'closed')),
     created_at      TEXT NOT NULL,
+    created_by      TEXT,  -- the user who asked for it (written in the same transaction)
     approved_by     TEXT,  -- the PERSON who approved a high-severity ticket (audit)
     approved_at     TEXT,
     -- last line of defense: no code path can store an unapproved high-severity ticket
     CHECK (severity != 'high'
            OR (trim(coalesce(approved_by, '')) != '' AND approved_at IS NOT NULL))
 );
+
+-- Who asked what, which tools ran, what changed. Append-only: the triggers refuse
+-- UPDATE and DELETE, so a bug or a careless script can not rewrite history.
+CREATE TABLE IF NOT EXISTS audit_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused, so gaps show deletions
+    at         TEXT NOT NULL,
+    user_id    TEXT NOT NULL CHECK (trim(user_id) != ''),
+    session_id TEXT NOT NULL,
+    channel    TEXT NOT NULL CHECK (channel IN ('cli', 'mcp', 'eval')),
+    action     TEXT NOT NULL CHECK (action IN ('ask', 'tool', 'approve')),
+    detail     TEXT NOT NULL CHECK (json_valid(detail))
+);
+CREATE INDEX IF NOT EXISTS audit_log_user ON audit_log (user_id, at);
+
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
 """
 
 # Columns added after the first version. A database created before them gets them
 # with ALTER TABLE (no data lost). SQLite can not add a table CHECK that way, so only
 # a newly created database has the CHECK above; tools.create_ticket checks it in code too.
-ADDED_COLUMNS = {"tickets": ["approved_by TEXT", "approved_at TEXT"]}
+ADDED_COLUMNS = {"tickets": ["approved_by TEXT", "approved_at TEXT", "created_by TEXT"]}
 
 
 def connect(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:

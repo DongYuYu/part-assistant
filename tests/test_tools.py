@@ -90,8 +90,10 @@ def test_database_refuses_an_unapproved_high_ticket(tools, approved_by, approved
     """Even SQL that bypasses create_ticket can not store one."""
     with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
         tools.conn.execute(
-            "INSERT INTO tickets VALUES ('TK-9999','x','FAN-4028-HS','t','d','high','open',"
-            "'2026-11-14', ?, ?)", (approved_by, approved_at))
+            "INSERT INTO tickets (ticket_id, idempotency_key, part_no, title, description, "
+            "severity, status, created_at, approved_by, approved_at) VALUES "
+            "('TK-9999','x','FAN-4028-HS','t','d','high','open','2026-11-14', ?, ?)",
+            (approved_by, approved_at))
 
 
 def test_an_old_database_gets_the_new_columns_without_losing_data(tmp_path):
@@ -106,6 +108,8 @@ def test_an_old_database_gets_the_new_columns_without_losing_data(tmp_path):
     init_schema(conn)  # running it again must not fail
     row = conn.execute("SELECT * FROM tickets").fetchone()
     assert row["ticket_id"] == "TK-0001" and row["approved_by"] is None
+    assert row["created_by"] is None  # unknown for tickets made before the column existed
+    assert conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == 0  # table added
 
 
 def test_ticket_for_unknown_part_is_refused(tools):

@@ -27,6 +27,7 @@ from typing import Annotated, Literal
 from mcp.server.mcpserver import Elicit, ElicitationResult, MCPServer, Resolve
 from pydantic import BaseModel, Field
 
+from part_assistant import audit
 from part_assistant.agent import idempotency_key
 from part_assistant.retrieve import Retriever
 from part_assistant.tools import TOOL_SCHEMAS, Tools
@@ -49,12 +50,20 @@ class Approval(BaseModel):
 
 
 def build_server(tools: Tools, load_retriever: Callable[[], Retriever] | None = None,
-                 session_id: str | None = None) -> MCPServer:
+                 session_id: str | None = None, user_id: str | None = None) -> MCPServer:
     """load_retriever is called on the first search, so the server starts in a second
     instead of waiting for two GPU models to load."""
     # stdio: one server process per host session, so one id per process.
     session_id = session_id or uuid.uuid4().hex
+    # The host's model asks the questions, so the server never sees them: every tool
+    # call is audited instead. The user is fixed when the host starts the server.
+    user = audit.current_user(user_id)
     mcp = MCPServer(name="part-assistant", instructions=INSTRUCTIONS)
+
+    def audited(name: str, args: dict, output: dict) -> dict:
+        audit.record(tools.conn, user, session_id, "mcp", "tool",
+                     {"name": name, "input": args, "result": audit.summarize(name, output)})
+        return output
 
     def key(part_no: str, severity: str) -> str:
         return idempotency_key(session_id, part_no, severity)
@@ -75,15 +84,15 @@ def build_server(tools: Tools, load_retriever: Callable[[], Retriever] | None = 
     async def search_docs(query: str) -> dict:
         if tools.retriever is None and load_retriever is not None:
             tools.retriever = load_retriever()
-        return tools.search_docs(query)
+        return audited("search_docs", {"query": query}, tools.search_docs(query))
 
     @mcp.tool(description=DESCRIPTIONS["lookup_part"])
     async def lookup_part(part_no: str) -> dict:
-        return tools.lookup_part(part_no)
+        return audited("lookup_part", {"part_no": part_no}, tools.lookup_part(part_no))
 
     @mcp.tool(description=DESCRIPTIONS["check_stock"])
     async def check_stock(part_no: str) -> dict:
-        return tools.check_stock(part_no)
+        return audited("check_stock", {"part_no": part_no}, tools.check_stock(part_no))
 
     @mcp.tool(description=DESCRIPTIONS["create_ticket"]
               + " For high severity the user is asked to confirm in a form.")
@@ -95,11 +104,14 @@ def build_server(tools: Tools, load_retriever: Callable[[], Retriever] | None = 
         if severity == "high" and approval.action == "accept" and approval.data is not None:
             approver = approval.data.approver.strip() or None
         result = tools.create_ticket(part_no, title, description, severity,
-                                     key(part_no, severity), approved_by=approver)
+                                     key(part_no, severity), approved_by=approver,
+                                     created_by=user)
         if result.get("status") == "needs_human_confirmation":  # declined, cancelled, no name
             why = "no approver name given" if approval.action == "accept" else approval.action
-            return {"status": "not_created", "reason": f"the user did not approve: {why}"}
-        return result
+            result = {"status": "not_created", "reason": f"the user did not approve: {why}"}
+        args = {"part_no": part_no, "title": title, "description": description,
+                "severity": severity}
+        return audited("create_ticket", args, result)
 
     return mcp
 
@@ -120,7 +132,7 @@ def check_setup(db_path: Path, chunks_path: Path) -> list[str]:
 
 def main() -> None:
     from part_assistant.chunk import OUT_PATH, load_chunks
-    from part_assistant.db import DEFAULT_DB_PATH, connect
+    from part_assistant.db import DEFAULT_DB_PATH, connect, init_schema
     from part_assistant.retrieve import Embedder, Reranker
 
     problems = check_setup(DEFAULT_DB_PATH, OUT_PATH)
@@ -133,7 +145,9 @@ def main() -> None:
     def load_retriever() -> Retriever:
         return Retriever(load_chunks(), Embedder(), Reranker())
 
-    build_server(Tools(connect()), load_retriever).run("stdio")
+    conn = connect()
+    init_schema(conn)  # an older database gets the new columns and the audit table
+    build_server(Tools(conn), load_retriever).run("stdio")
 
 
 if __name__ == "__main__":

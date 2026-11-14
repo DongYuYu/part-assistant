@@ -74,7 +74,8 @@ def seed(conn: sqlite3.Connection, rng_seed: int = 42) -> None:
                 on_hand = 0 if part_no in OUT_OF_STOCK else rng.randint(0, 500)
                 reserved = rng.randint(0, on_hand)
                 conn.execute(
-                    "INSERT INTO inventory VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO inventory (part_no, warehouse, qty_on_hand, qty_reserved, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
                     (part_no, wh, on_hand, reserved, SEED_TIME),
                 )
         conn.executemany(

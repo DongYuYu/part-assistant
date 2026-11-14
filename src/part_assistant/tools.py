@@ -83,7 +83,8 @@ class Tools:
                 "total_available": sum(w["available"] for w in warehouses)}
 
     def create_ticket(self, part_no: str, title: str, description: str, severity: str,
-                      idempotency_key: str, approved_by: str | None = None) -> dict:
+                      idempotency_key: str, approved_by: str | None = None,
+                      created_by: str | None = None) -> dict:
         """Create a ticket once per idempotency_key.
 
         Same key again (e.g. a retry after a timeout) -> the SAME ticket is returned,
@@ -113,10 +114,10 @@ class Tools:
             try:
                 self.conn.execute(
                     "INSERT INTO tickets (ticket_id, idempotency_key, part_no, title, "
-                    "description, severity, status, created_at, approved_by, approved_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    "description, severity, status, created_at, created_by, approved_by, "
+                    "approved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (ticket_id, idempotency_key, part_no, title, description, severity,
-                     "open", now, approved_by, now if approved_by else None))
+                     "open", now, created_by, approved_by, now if approved_by else None))
             except sqlite3.IntegrityError:
                 # A concurrent request with the same key won the race: return its ticket.
                 row = self.conn.execute(

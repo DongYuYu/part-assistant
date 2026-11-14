@@ -53,6 +53,9 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
       PART_ASSISTANT_LOCAL_MODEL: ${PART_ASSISTANT_LOCAL_MODEL:-qwen3:4b}
+      # Who is asking (audit log). Inside the container the account is always "app",
+      # so pass the host's name; `run --rm app ask --user NAME "..."` also works.
+      PART_ASSISTANT_USER: ${PART_ASSISTANT_USER:-${USER:-}}
       # `prepare` downloaded the models: never ask the HF Hub again. Without this,
       # every start checks for updates online (once took minutes, rate limited).
       HF_HUB_OFFLINE: "1"

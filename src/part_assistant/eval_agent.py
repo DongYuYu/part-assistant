@@ -238,7 +238,8 @@ def build_eval_agent(db_path: Path) -> Agent:
     conn = connect(db_path)
     init_schema(conn)
     seed(conn)
-    return Agent(Tools(conn, Retriever(load_chunks(), Embedder(), Reranker())))
+    return Agent(Tools(conn, Retriever(load_chunks(), Embedder(), Reranker())),
+                 channel="eval")
 
 
 def main() -> None:

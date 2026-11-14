@@ -203,7 +203,7 @@ def run(attacks: list[Attack], tmp: Path, max_usd: float) -> list[dict]:
     rows, spent = [], 0.0
     for a, retriever in retrievers(attacks, tmp):
         tools = Tools(conn, retriever)
-        agent = Agent(tools)  # no fallback: we test Claude
+        agent = Agent(tools, channel="eval")  # no fallback: we test Claude
         if spent >= max_usd:
             print(f"stop: spent ${spent:.2f} >= ${max_usd:.2f}")
             break
