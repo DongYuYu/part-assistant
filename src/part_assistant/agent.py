@@ -15,9 +15,19 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import anthropic
+
 from part_assistant.tools import TOOL_SCHEMAS, Tools
 
 MODEL = "claude-opus-5-5"
+
+# Claude is unavailable (after the SDK's own 2 retries): answer with the local model.
+# NOT here on purpose: 400/401/403 (bad request, bad key) are our bugs; a fallback
+# would hide them.
+FALLBACK_ERRORS = (anthropic.APIConnectionError,  # includes APITimeoutError
+                   anthropic.InternalServerError,  # 5xx, including 529 overloaded
+                   anthropic.RateLimitError)       # 429
+DEGRADED_BANNER = "⚠ 降級模式：雲端模型暫時無法使用，以下由地端模型回答，請自行核對來源。\n\n"
 MAX_STEPS = 8
 MAX_COST_USD = 0.50
 TRACE_DIR = Path("traces")
@@ -59,6 +69,7 @@ class AgentResult:
     pending_ticket: dict | None = None  # high-severity draft waiting for a human
     trace: list[dict] = field(default_factory=list)
     cost_usd: float = 0.0
+    degraded: bool = False  # answered by the local fallback model
 
 
 def call_cost(model: str, usage) -> float:
@@ -130,11 +141,10 @@ def idempotency_key(session_id: str, part_no: str, severity: str) -> str:
 class Agent:
     def __init__(self, tools: Tools, client=None, model: str = MODEL,
                  max_steps: int = MAX_STEPS, max_cost_usd: float = MAX_COST_USD,
-                 show: bool = False):
+                 show: bool = False, fallback=None):
         if client is None:  # tests pass a fake client
-            import anthropic
-
             client = anthropic.Anthropic()  # key from ANTHROPIC_API_KEY / .env, never in code
+        self.fallback = fallback  # a LocalAgent, or None: errors are raised
         self.client = client
         self.tools = tools
         self.model = model
@@ -163,8 +173,42 @@ class Agent:
 
     def run(self, question: str, session_id: str | None = None) -> AgentResult:
         session_id = session_id or uuid.uuid4().hex
-        messages: list[dict] = [{"role": "user", "content": question}]
         result = AgentResult(answer="", stop="max_steps")
+        try:
+            self._loop(question, session_id, result)
+        except FALLBACK_ERRORS as e:
+            if self.fallback is None:
+                raise
+            result = self._fall_back(question, session_id, result, e)
+        if result.pending_ticket and result.stop == "done":
+            result.stop = "needs_confirmation"
+        return result
+
+    def _fall_back(self, question: str, session_id: str, partial: AgentResult,
+                   error: Exception) -> AgentResult:
+        """Start the question again on the local model. What Claude already did is kept:
+        its tool calls stay in the result (a ticket it wrote stays recorded)."""
+        event = {"type": "fallback", "reason": f"{type(error).__name__}: {error}"[:300],
+                 "to": self.fallback.model}
+        if self.show:
+            print(f"\n=== Claude 無法使用（{event['reason']}），改用地端模型 "
+                  f"{self.fallback.model}", flush=True)
+        try:
+            local = self.fallback.run(question, session_id)
+            local.answer = DEGRADED_BANNER + local.answer
+        except Exception as e:  # Ollama is down too: say so, do not crash
+            local = AgentResult(answer="（雲端和地端模型都暫時無法使用，請稍後再試）",
+                                stop="unavailable")
+            event["fallback_error"] = f"{type(e).__name__}: {e}"[:300]
+        local.degraded = True
+        local.tool_calls = partial.tool_calls + local.tool_calls
+        local.trace = partial.trace + [event] + local.trace
+        local.cost_usd += partial.cost_usd
+        local.pending_ticket = partial.pending_ticket  # the local model can not make one
+        return local
+
+    def _loop(self, question: str, session_id: str, result: AgentResult) -> None:
+        messages: list[dict] = [{"role": "user", "content": question}]
 
         shown = 0  # messages already printed by --show
         for step in range(1, self.max_steps + 1):
@@ -240,10 +284,6 @@ class Agent:
         else:
             result.answer = "（已達步數上限，停止處理）"
 
-        if result.pending_ticket and result.stop == "done":
-            result.stop = "needs_confirmation"
-        return result
-
     def approve(self, pending: dict, approver: str) -> dict:
         """A PERSON approved a high-severity draft: write it. The model is not involved,
         and the same idempotency key means approving twice still gives one ticket."""
@@ -255,7 +295,7 @@ def save_trace(question: str, result: AgentResult, trace_dir: Path = TRACE_DIR) 
     path = trace_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}.json"
     path.write_text(json.dumps({
         "question": question, "answer": result.answer, "stop": result.stop,
-        "cost_usd": round(result.cost_usd, 6), "trace": result.trace,
+        "degraded": result.degraded, "cost_usd": round(result.cost_usd, 6), "trace": result.trace,
     }, ensure_ascii=False, indent=2))
     return path
 
@@ -263,10 +303,11 @@ def save_trace(question: str, result: AgentResult, trace_dir: Path = TRACE_DIR) 
 def build_agent(show: bool = False) -> Agent:
     from part_assistant.chunk import load_chunks
     from part_assistant.db import connect
+    from part_assistant.local_agent import LocalAgent
     from part_assistant.retrieve import Embedder, Reranker, Retriever
 
-    retriever = Retriever(load_chunks(), Embedder(), Reranker())
-    return Agent(Tools(connect(), retriever), show=show)
+    tools = Tools(connect(), Retriever(load_chunks(), Embedder(), Reranker()))
+    return Agent(tools, show=show, fallback=LocalAgent(tools))  # same tools, same retriever
 
 
 def main() -> None:
@@ -283,7 +324,8 @@ def main() -> None:
         if ok:
             print(agent.approve(result.pending_ticket, approver=ok))
     path = save_trace(question, result)
-    print(f"[{result.stop}] {len(result.trace)} trace events, ${result.cost_usd:.4f} -> {path}")
+    stop = result.stop + (" degraded" if result.degraded else "")
+    print(f"[{stop}] {len(result.trace)} trace events, ${result.cost_usd:.4f} -> {path}")
 
 
 if __name__ == "__main__":

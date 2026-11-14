@@ -113,7 +113,7 @@ flowchart TB
 - ✅ 端到端評測：黃金樣本 48/48（2 題已知問題不計分），50 題 $1.38
 - ✅ MCP server（官方 Python SDK 2.x），可接 Claude Code / Claude Desktop
 - ✅ GitHub Actions：每次 push / PR 跑 lint 和測試；PR 加上 `run-eval` 標籤時跑端到端評測，低於 95% 就失敗
-- ⬜ 模型路由（Ollama ↔ Claude）
+- ✅ 模型路由：Claude 無法使用時降級到地端模型（Ollama qwen3:4b，只給唯讀工具）；依題型分流量過不划算，所以不做（[數字](design/routing.md)）
 - ⬜ Docker Compose 一鍵啟動
 
 **縮小和實際上線的差距**（成本低，但都是企業 AI 系統的必要能力）
@@ -122,7 +122,7 @@ flowchart TB
 - ⬜ **權限過濾**：每份文件有 `access_level`，在**檢索層**依使用者角色過濾，不靠模型「不要說出來」
 - ⬜ **間接 prompt injection**：在一份假文件裡藏惡意指令，驗證 agent 不會照著執行
 - ⬜ **稽核紀錄**：trace 附上使用者 ID，記錄誰問了什麼、呼叫了哪些工具、改了什麼資料
-- ⬜ **斷路器和降級**：模型服務故障時，庫存查詢等純資料庫功能照常運作
+- ⬜ **斷路器**：降級已完成（見上）；還缺 Claude 持續故障時，連續失敗幾次就直接走降級一段時間，不必每題都等重試失敗
 
 **第二階段：推論閘道**
 
@@ -163,6 +163,8 @@ uv run --env-file .env python -m part_assistant.agent --show "..."   # 印出每
 uv run --env-file .env python -m part_assistant.eval_agent --max-usd 5   # 端到端評測 50 題
 uv run python -m part_assistant.eval_agent --regrade runs/eval-....json  # 改了黃金樣本後重新批改，免費
 ```
+
+**降級（選用）**：裝了 [Ollama](https://ollama.com) 並執行 `ollama pull qwen3:4b` 之後，Claude 連不上、過載或被限流時，agent 會改用地端模型回答。降級時只能查詢、不能開工單，回答開頭會標示「降級模式」。沒有裝 Ollama 也能正常使用。
 
 **當成 MCP server 用**：請看下面的[接到你的 MCP host](#接到你的-mcp-host)。
 
@@ -269,6 +271,7 @@ part-assistant/
 │   ├── eval_retrieval.py  # 用黃金樣本計算 recall@k 和 MRR
 │   ├── tools.py       # 4 個工具和 JSON schema；安全規則寫在程式裡
 │   ├── agent.py       # agent 迴圈：步數和成本上限、trace、高嚴重度要人工確認
+│   ├── local_agent.py # Claude 無法使用時的降級：Ollama 地端模型，只有唯讀工具
 │   ├── eval_agent.py  # 端到端評測：真的 agent 回答黃金樣本，逐題批改
 │   ├── mcp_server.py  # 同一組工具包成 MCP server
 │   └── golden.py      # 讀取黃金樣本、比對答案
@@ -430,6 +433,15 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 
 > 完整說明和常見問題見 [design/agent.md](design/agent.md)。
 
+### 模型路由：地端模型只當備援
+
+- **用黃金樣本量過**：qwen3:4b（開思考，RTX 5070 Laptop）29/48，Claude 48/48。
+- **依題型分流不划算**：地端答得好的題型（拒答、查庫存、追問）只佔 Claude 成本的 20%，所以平常全部交給 Claude。
+- **只有 Claude 暫時無法使用才降級**（連不上、5xx、429）。400、401 是自己的 bug，降級會把它藏起來，所以直接報錯。降級時只給唯讀工具，回答加上警告。
+- **量測時抓到批改器的盲點**：推理過程漏進回答、照抄 `(file p.N)` 範本，回答裡的數字是對的，所以關鍵字檢查抓不到；批改器因此加了格式檢查。
+
+> 完整數字和常見問題見 [design/routing.md](design/routing.md)。
+
 ### 為什麼選 pymupdf4llm？
 
 我們用同一張困難表格比較過 `pdfplumber` 和 `pymupdf4llm`。pdfplumber 靠表格的**格線**找表格，所以**漏掉了整張無格線的表格**。pymupdf4llm 有版面分析模型，而且能輸出帶 `rowspan` 的 HTML。
@@ -456,6 +468,7 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 - **第一次解析很慢**：9 份文件約 2 分鐘，因為版面分析模型跑在 CPU 上。之後會使用快取（約 0.3 秒）。
 - **token 數是估計值**：目前以「4 個字元約等於 1 個 token」估算，確切數字要等選定 embedding 模型後再用它的 tokenizer 計算。
 - **跨頁的大表被切開後，每一段都標示整張表的頁碼範圍**（例如 `p.12-14`），因為合併時沒有保留每一列的頁碼。
+- **降級模式的品質約 60%，每題 20–30 秒**：只在 Claude 無法使用時才會用到，回答都會加上警告。
 - **問題是中文、文件是英文**：BM25 無法用「效率」比對到 "Efficiency"，所以向量檢索要用多語 embedding 模型。
 
 ---

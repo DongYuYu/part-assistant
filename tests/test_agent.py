@@ -39,8 +39,12 @@ class FakeClient:
         # Snapshot: the agent keeps appending to the same list after this call.
         self.requests.append({**kw, "messages": list(kw["messages"])})
         if len(self.responses) > 1 or not self.repeat_last:
-            return self.responses.pop(0)
-        return self.responses[0]
+            r = self.responses.pop(0)
+        else:
+            r = self.responses[0]
+        if isinstance(r, Exception):  # scripted failure: the API is down at this step
+            raise r
+        return r
 
 
 @pytest.fixture
