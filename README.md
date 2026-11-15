@@ -125,6 +125,8 @@ flowchart TB
 - ✅ **稽核紀錄**：每個問題記下誰問的、呼叫了哪些工具、開了哪張單；資料庫用 trigger 拒絕修改和刪除；工單記下建立者和核准人（[說明](design/audit.md)）
 - ✅ **斷路器**：Claude 連續失敗 3 次後，接下來 60 秒直接走降級，不必每題都等重試失敗（[說明](design/routing.md#斷路器circuit-breaker)）
 
+還缺什麼才能正式上線（資料能不能出公司、SSO、真實問題的評測…），以及先做哪個：見 [design/production-gap.md](design/production-gap.md)。
+
 **第二階段：推論閘道**
 
 - ⬜ vLLM 跑 1.5B–3B 的小模型；比較 FP16 和 INT4（AWQ / GPTQ）的記憶體、TTFT、tokens/s 和黃金樣本分數
