@@ -1,7 +1,7 @@
 """The agent loop: ask the model, run the tools it asks for, repeat until it answers.
-
     uv run --env-file .env python -m part_assistant.agent "TEC3200 在 50% 負載時的效率是多少？"
     uv run --env-file .env python -m part_assistant.agent --show "..."   # print every API exchange
+
 
 Limits (an agent must always stop): at most MAX_STEPS model calls and MAX_COST_USD
 per question. Every model call and tool call is recorded in a trace (time, tokens, cost).
@@ -21,7 +21,6 @@ from part_assistant import audit
 from part_assistant.tools import TOOL_SCHEMAS, Tools
 
 MODEL = "claude-opus-5-5"
-
 # Claude is unavailable (after the SDK's own 2 retries): answer with the local model.
 # NOT here on purpose: 400/401/403 (bad request, bad key) are our bugs; a fallback
 # would hide them.
@@ -39,7 +38,6 @@ PRICES = {"claude-opus-5-5": {"input": 4.00, "output": 20.00,
 
 SYSTEM = """\
 You are a parts assistant for a server power-supply factory. Answer in Traditional Chinese (Taiwan).
-
 You can only learn facts through tools:
 - search_docs: vendor datasheets (English PDFs). Translate terms yourself.
 - lookup_part, check_stock, create_ticket: internal parts, stock and tickets.
