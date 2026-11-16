@@ -108,7 +108,7 @@ flowchart TB
 - ✅ PDF 解析和表格後處理（合併儲存格、註腳、跨頁表格）
 - ✅ 黃金樣本 50 題，加上驗證測試
 - ✅ 切段（chunk），加上解析快取
-- ✅ 檢索：型號過濾 + bge-m3 向量 + reranker（比較過 BM25、hybrid 和 3 個 embedding 模型；r@5 = 1.00、MRR = 0.88）
+- ✅ 檢索：型號過濾 + bge-m3 向量 + reranker（比較過 BM25、hybrid 和 3 個 embedding 模型；r@5 = 1.00、MRR = 0.91）
 - ✅ 4 個工具和 agent 迴圈（Claude API tool use；高嚴重度工單要人工確認）
 - ✅ `create_ticket` 的冪等和重試測試（idempotency key 由程式產生，模型無法指定）
 - ✅ Trace（每次模型和工具呼叫的耗時、token、快取、成本）、步數和預算上限
@@ -129,7 +129,7 @@ flowchart TB
 
 **第二階段：推論閘道**
 
-- ⬜ vLLM 跑 1.5B–3B 的小模型；比較 FP16 和 INT4（AWQ / GPTQ）的記憶體、TTFT、tokens/s 和黃金樣本分數
+- ✅ vLLM 跑 Qwen3 4B / 1.7B 的原始、FP8、INT4（AWQ）版本，比較記憶體、TTFT、tokens/s 和黃金樣本分數：8 GB 筆電 GPU 上選 4B INT4（20/48，115 tokens/s，4 人同時 436 tokens/s）；4B BF16 放不進，模型大小對分數的影響遠大於量化（[數字](design/local-llm.md)）
 - ⬜ 每個使用者的速率限制和 token 配額、輸入端 PII 遮罩、輸出端 schema 驗證
 - ⬜ Prometheus 指標加 Grafana 面板
 - ⬜ 壓測，換算每千次請求的成本
@@ -170,6 +170,14 @@ uv run python -m part_assistant.eval_agent --regrade runs/eval-....json  # 改�
 ```
 
 **降級（選用）**：裝了 [Ollama](https://ollama.com) 並執行 `ollama pull qwen3:4b` 之後，Claude 連不上、過載或被限流時，agent 會改用地端模型回答。降級時只能查詢、不能開工單，回答開頭會標示「降級模式」。沒有裝 Ollama 也能正常使用。
+
+地端模型走 OpenAI 相容格式（`/v1/chat/completions`），所以 Ollama 和 vLLM 都能用：
+
+```bash
+OLLAMA_CONTEXT_LENGTH=16384 ollama serve   # Ollama 預設 4096 token，裝不下搜尋結果
+PART_ASSISTANT_LOCAL_URL=http://127.0.0.1:8000/v1 PART_ASSISTANT_LOCAL_MODEL=Qwen/Qwen3-4B-AWQ \
+  uv run --env-file .env python -m part_assistant.agent "問題"   # 改用 vLLM
+```
 
 **當成 MCP server 用**：請看下面的[接到你的 MCP host](#接到你的-mcp-host)。
 
@@ -311,7 +319,8 @@ part-assistant/
 │   ├── eval_retrieval.py  # 用黃金樣本計算 recall@k 和 MRR
 │   ├── tools.py       # 4 個工具和 JSON schema；安全規則寫在程式裡
 │   ├── agent.py       # agent 迴圈：步數和成本上限、trace、高嚴重度要人工確認
-│   ├── local_agent.py # Claude 無法使用時的降級：Ollama 地端模型，只有唯讀工具
+│   ├── local_agent.py # Claude 無法使用時的降級：地端模型（Ollama 或 vLLM），只有唯讀工具
+│   ├── bench_llm.py   # 地端模型的速度量測（TTFT、tokens/s、多人同時）
 │   ├── circuit.py     # 斷路器：Claude 連續失敗幾次後，暫時直接走降級
 │   ├── audit.py       # 稽核紀錄：誰問了什麼、呼叫了哪些工具（只能新增）
 │   ├── access.py      # 權限等級和現行版本：搜尋時誰能看到哪些段落
@@ -463,14 +472,14 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 
 ### 檢索：用數字選，不照教科書選
 
-比較了 8 種組合（硬體：RTX 5070 Laptop）：
+比較了 8 種組合（硬體：RTX 5070 Laptop；2026-11-16 黃金樣本修正後重量）：
 
 | 做法 | r@1 | r@5 | MRR |
 |---|---|---|---|
-| BM25 | 0.25 | 0.62 | 0.44 |
-| bge-m3 向量 | 0.56 | 0.89 | 0.74 |
-| hybrid（BM25 + 向量） | 0.42 | 0.81 | 0.59 |
-| **型號過濾 + 向量 + reranker** | **0.81** | **1.00** | **0.88** |
+| BM25 | 0.27 | 0.66 | 0.50 |
+| bge-m3 向量 | 0.58 | 0.89 | 0.80 |
+| hybrid（BM25 + 向量） | 0.45 | 0.81 | 0.66 |
+| **型號過濾 + 向量 + reranker** | **0.75** | **1.00** | **0.91** |
 
 **hybrid 比單用向量差**：問題是中文、文件是英文，BM25 只比對得到型號，排名大多是雜訊。BM25 精確比對料號的好處，改用「型號過濾」取得。完整說明見 [design/retrieval.md](design/retrieval.md)。
 

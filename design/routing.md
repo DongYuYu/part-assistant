@@ -3,6 +3,8 @@
 一句話：**平常全部交給 Claude；Claude 無法使用時，改用地端模型（Ollama 的 qwen3:4b），而且只給它唯讀工具。**
 不依題目類型分流給地端模型，因為量測結果顯示它省不了多少錢，品質卻會下降。
 
+地端模型走 OpenAI 格式，Ollama 和 vLLM 都能用；不同模型和量化的比較見 [local-llm.md](local-llm.md)。
+
 程式：`src/part_assistant/local_agent.py`、`src/part_assistant/agent.py`（`FALLBACK_ERRORS`、`_fall_back`）、`src/part_assistant/circuit.py`（斷路器）。
 測試：`tests/test_fallback.py`、`tests/test_circuit.py`。
 

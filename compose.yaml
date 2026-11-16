@@ -21,6 +21,10 @@ x-app: &app
 services:
   ollama:  # local model for the fallback when Claude is unavailable
     image: ollama/ollama:0.34.2
+    environment:
+      # The app uses Ollama's OpenAI endpoint, which can not set the context per
+      # request; the default 4096 tokens cuts off the search results.
+      OLLAMA_CONTEXT_LENGTH: "16384"
     volumes:
       - ollama:/root/.ollama
     healthcheck:

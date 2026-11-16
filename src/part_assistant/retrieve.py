@@ -12,6 +12,7 @@ name, so its ranking is mostly noise. Exact part-number matching is done by the
 model filter instead.
 """
 
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,16 +38,19 @@ PREFIXES = {
 
 def _load_on_gpu(model):
     """fp16 on the GPU: half the VRAM and faster, with the same ranking in practice."""
-    import torch
-
-    if torch.cuda.is_available():
+    if _device() == "cuda":
         model.half()
     return model
 
 
 def _device() -> str:
+    """PART_ASSISTANT_RETRIEVAL_DEVICE=cpu leaves the GPU to a local LLM: on an 8 GB card
+    the two retrieval models need about 4.3 GB, too much to share with vLLM."""
     import torch
 
+    forced = os.environ.get("PART_ASSISTANT_RETRIEVAL_DEVICE")
+    if forced:
+        return forced
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 

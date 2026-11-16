@@ -3,6 +3,7 @@
     uv run --env-file .env python -m part_assistant.eval_agent --ids multi-01 spec-01
     uv run --env-file .env python -m part_assistant.eval_agent --max-usd 5
     uv run python -m part_assistant.eval_agent --regrade runs/eval-....json   # free
+    uv run python -m part_assistant.eval_agent --local   # the fallback model, free
 
 eval_retrieval.py only checks that the right passage was FOUND. This checks what the
 user actually sees: the answer text, the citation, which tools were called, and that
@@ -28,6 +29,7 @@ from pathlib import Path
 
 from part_assistant.agent import Agent, AgentResult
 from part_assistant.golden import Case, check_answer_text, load_cases
+from part_assistant.local_agent import LocalAgent
 from part_assistant.tools import Tools
 
 RUNS_DIR = Path("runs")
@@ -131,7 +133,7 @@ def _log(msg: str) -> None:
     print(msg, flush=True)  # CI logs are not a terminal: unflushed lines appear only at exit
 
 
-def run_eval(agent: Agent, cases: list[Case], max_usd: float, log=_log,
+def run_eval(agent: Agent | LocalAgent, cases: list[Case], max_usd: float, log=_log,
              on_grade=None) -> list[Grade]:
     """on_grade(g) is called after every case, e.g. to save it at once: a run killed by a
     timeout then still leaves the cases it finished (and what they cost)."""
@@ -228,8 +230,10 @@ def markdown_report(summary: dict, grades: list[Grade]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_eval_agent(db_path: Path) -> Agent:
-    """Real retriever + a FRESH seeded database (tickets from the eval stay out of the real DB)."""
+def build_eval_agent(db_path: Path, local: bool = False) -> Agent | LocalAgent:
+    """Real retriever + a FRESH seeded database (tickets from the eval stay out of the real DB).
+    local: the fallback LocalAgent instead of Claude (read-only tools, so ticket cases
+    fail by design); its server and model come from the PART_ASSISTANT_LOCAL_* variables."""
     from part_assistant.chunk import load_chunks
     from part_assistant.db import connect, init_schema
     from part_assistant.retrieve import Embedder, Reranker, Retriever
@@ -238,8 +242,10 @@ def build_eval_agent(db_path: Path) -> Agent:
     conn = connect(db_path)
     init_schema(conn)
     seed(conn)
-    return Agent(Tools(conn, Retriever(load_chunks(), Embedder(), Reranker())),
-                 channel="eval")
+    tools = Tools(conn, Retriever(load_chunks(), Embedder(), Reranker()))
+    if local:
+        return LocalAgent(tools)
+    return Agent(tools, channel="eval")
 
 
 def main() -> None:
@@ -248,6 +254,8 @@ def main() -> None:
     ap.add_argument("--category", help="only this category")
     ap.add_argument("--max-usd", type=float, default=5.0, help="stop the run past this cost")
     ap.add_argument("--regrade", type=Path, help="re-grade a saved run (no API calls)")
+    ap.add_argument("--local", action="store_true",
+                    help="answer with the local fallback model instead of Claude (free)")
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
                     help="exit 1 if pass rate (known issues excluded) is below this")
     args = ap.parse_args()
@@ -274,7 +282,7 @@ def main() -> None:
         out = RUNS_DIR / f"eval-{time.strftime('%Y%m%d-%H%M%S')}.json"
         partial = out.with_suffix(".partial.jsonl")  # one line per finished case
         with tempfile.TemporaryDirectory() as tmp, partial.open("w") as f:
-            agent = build_eval_agent(Path(tmp) / "eval.db")
+            agent = build_eval_agent(Path(tmp) / "eval.db", local=args.local)
 
             def save(g: Grade) -> None:
                 f.write(json.dumps(asdict(g), ensure_ascii=False) + "\n")

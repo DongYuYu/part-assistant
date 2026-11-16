@@ -1,8 +1,10 @@
 """Fallback: when Claude is unavailable, a local model answers with READ-ONLY tools.
 
-No network: Claude is a scripted FakeClient that raises, Ollama is a scripted fake chat.
+No network: Claude is a scripted FakeClient that raises, the local model (Ollama or vLLM,
+OpenAI chat-completions format) is a scripted fake chat.
 """
 
+import json
 import urllib.error
 
 import anthropic
@@ -12,7 +14,13 @@ from test_agent import LOW, FakeClient, n_tickets, text, tool_use, usage
 
 from part_assistant.agent import DEGRADED_BANNER, Agent, call_cost
 from part_assistant.db import connect, init_schema
-from part_assistant.local_agent import READ_ONLY, LocalAgent, ollama_url, strip_reasoning
+from part_assistant.local_agent import (
+    READ_ONLY,
+    LocalAgent,
+    local_url,
+    parse_arguments,
+    strip_reasoning,
+)
 from part_assistant.seed import seed
 from part_assistant.tools import Tools
 
@@ -32,15 +40,20 @@ def status_error(cls, code):
     return cls(f"HTTP {code}", response=httpx2.Response(code, request=REQ), body=None)
 
 
-def ol_text(t):
-    return {"message": {"role": "assistant", "content": t}, "done_reason": "stop",
-            "prompt_eval_count": 100, "eval_count": 20}
+def ol_text(t, finish="stop"):
+    return {"choices": [{"message": {"role": "assistant", "content": t},
+                         "finish_reason": finish}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20}}
 
 
-def ol_tool(name, args):
-    return {"message": {"role": "assistant", "content": "",
-                        "tool_calls": [{"function": {"name": name, "arguments": args}}]},
-            "done_reason": "stop"}
+def ol_tool(name, args, call_id="call_1"):
+    """args: a dict (sent as a JSON string, like the OpenAI format) or a raw string."""
+    raw = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+    return {"choices": [{"message": {
+        "role": "assistant", "content": "", "reasoning": "secret thoughts",
+        "tool_calls": [{"id": call_id, "type": "function",
+                        "function": {"name": name, "arguments": raw}}]},
+        "finish_reason": "tool_calls"}]}
 
 
 class FakeOllama:
@@ -164,14 +177,62 @@ def test_strip_reasoning(content, expected):
     assert strip_reasoning(content) == expected
 
 
-@pytest.mark.parametrize("host,url", [
-    (None, "http://127.0.0.1:11434/api/chat"),
-    ("0.0.0.0:8080", "http://0.0.0.0:8080/api/chat"),
-    ("http://ollama:11434/", "http://ollama:11434/api/chat"),  # e.g. a Docker Compose service
+@pytest.mark.parametrize("base,host,url", [
+    (None, None, "http://127.0.0.1:11434/v1/chat/completions"),
+    (None, "0.0.0.0:8080", "http://0.0.0.0:8080/v1/chat/completions"),
+    (None, "http://ollama:11434/", "http://ollama:11434/v1/chat/completions"),  # Compose
+    ("http://127.0.0.1:8000/v1/", "ignored:1", "http://127.0.0.1:8000/v1/chat/completions"),
 ])
-def test_ollama_url(monkeypatch, host, url):
-    if host is None:
-        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+def test_local_url(monkeypatch, base, host, url):
+    for name, value in (("PART_ASSISTANT_LOCAL_URL", base), ("OLLAMA_HOST", host)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    assert local_url() == url
+
+
+# --- the OpenAI chat-completions format
+
+def test_tool_result_is_linked_to_its_call_and_reasoning_is_not_sent_back(tools):
+    chat = FakeOllama(ol_tool("check_stock", STOCK, call_id="call_7"), ol_text("120 台"))
+    r = LocalAgent(tools, chat=chat).run("PSU-3200-54V 還有多少庫存？")
+    assert r.answer == "120 台" and r.tool_calls[0]["input"] == STOCK
+    sent = chat.bodies[1]["messages"]
+    assistant, tool = sent[2], sent[3]
+    assert "reasoning" not in assistant and assistant["tool_calls"][0]["id"] == "call_7"
+    assert tool["role"] == "tool" and tool["tool_call_id"] == "call_7"
+    assert json.loads(tool["content"])["part_no"] == "PSU-3200-54V"
+
+
+def test_broken_tool_arguments_are_reported_to_the_model(tools):
+    chat = FakeOllama(ol_tool("check_stock", '{"part_no": "PSU-'), ol_text("抱歉"))
+    r = LocalAgent(tools, chat=chat).run("PSU-3200-54V 還有多少庫存？")
+    assert r.tool_calls[0]["output"] == {"error": "arguments are not a valid JSON object"}
+    assert r.stop == "done"  # the loop goes on: the model can try again
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ('{"part_no": "A"}', {"part_no": "A"}), ({"part_no": "A"}, {"part_no": "A"}),
+    ("", {}), ("[1]", None), ("{oops", None),
+])
+def test_parse_arguments(raw, expected):
+    assert parse_arguments(raw) == expected
+
+
+def test_cut_off_answer_is_reported_as_truncated(tools):
+    r = LocalAgent(tools, chat=FakeOllama(ol_text("可用庫存", finish="length"))).run("q")
+    assert r.stop == "truncated"
+
+
+@pytest.mark.parametrize("think", [True, False])
+def test_thinking_switch_is_sent_to_both_servers(tools, think):
+    chat = FakeOllama(ol_text("ok"))
+    LocalAgent(tools, think=think, chat=chat).run("q")
+    body = chat.bodies[0]
+    assert body["temperature"] == 0
+    if think:  # Qwen3 thinks by default: nothing to send
+        assert "chat_template_kwargs" not in body and "reasoning_effort" not in body
     else:
-        monkeypatch.setenv("OLLAMA_HOST", host)
-    assert ollama_url() == url
+        assert body["chat_template_kwargs"] == {"enable_thinking": False}  # vLLM
+        assert body["reasoning_effort"] == "none"  # Ollama
