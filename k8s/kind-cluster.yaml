@@ -1,0 +1,14 @@
+# A local Kubernetes cluster in Docker, for trying the manifests in this folder:
+#
+#   kind create cluster --config k8s/kind-cluster.yaml
+#
+# One node on purpose: the gateway's SQLite file (keys, usage) is shared by its Pods
+# through one ReadWriteOnce volume, which only works when they run on the same node.
+# More nodes need a shared database (Postgres).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: part-assistant
+nodes:
+  - role: control-plane
+    # kind v0.33.0's default, pinned by digest (from its release notes).
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5

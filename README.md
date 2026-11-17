@@ -136,7 +136,7 @@ flowchart TB
 - ✅ Prometheus 指標：閘道的 `/metrics` 提供請求數、錯誤、延遲分布、token、成本、被擋下的原因；不放使用者 label，避免時間序列爆量
 - ✅ Grafana 面板：請求數、錯誤率、P50 / P95 延遲、token、花費、被擋下的原因；資料來源和面板都寫成檔案放在 git（`compose.monitoring.yaml`）
 - ⬜ 壓測，換算每千次請求的成本
-- ⬜（選做）Kubernetes manifest 範例
+- ✅ Kubernetes（kind）：閘道 3 個副本、共用 Redis 的速率限制、健康檢查、Secret。實測刪掉一個 Pod，1 秒內就補回；8 個請求分散到 3 個 Pod，剛好放行 4 個（[說明](k8s/README.md)）
 
 **第三階段（選做）**：SECOM 半導體良率預測
 
@@ -348,6 +348,7 @@ part-assistant/
 ├── compose.gpu.yaml   # 選用：讓容器使用 NVIDIA GPU
 ├── compose.monitoring.yaml  # 選用：Prometheus 和 Grafana，監控閘道
 ├── monitoring/        # Prometheus 設定、Grafana 資料來源和面板（JSON）
+├── k8s/               # Kubernetes manifest 和 kind 叢集設定
 ├── docker/entrypoint.sh  # 容器的指令：prepare / ask / mcp / eval
 ├── .mcp.json          # Claude Code 的 MCP 設定
 └── tests/             # pytest

@@ -1,0 +1,5 @@
+# Everything of this project in one namespace: easy to list, easy to delete.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: part-assistant

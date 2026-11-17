@@ -1,0 +1,9 @@
+# kubectl apply -k k8s/     (everything below, in the part-assistant namespace)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: part-assistant
+resources:
+  - namespace.yaml
+  - redis.yaml
+  - ollama.yaml
+  - gateway.yaml

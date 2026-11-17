@@ -1,0 +1,11 @@
+# The local model runs outside the cluster (Docker Compose, on the GPU). This gives it a
+# name inside the cluster, so the gateway's setting is just http://ollama:11434 and does
+# not change if Ollama moves. kind only: the Ollama container must join kind's network
+# (docker network connect kind liteon-agent-ollama-1). In production: a vLLM Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+spec:
+  type: ExternalName
+  externalName: liteon-agent-ollama-1

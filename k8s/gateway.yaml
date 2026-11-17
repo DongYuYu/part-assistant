@@ -1,0 +1,75 @@
+# The inference gateway: 3 identical Pods behind one Service.
+#
+# Keys and usage: one SQLite file on one volume shared by the 3 Pods. That works only
+# because kind runs one node (ReadWriteOnce = one node). Several nodes need Postgres.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gateway-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 3            # K8s keeps 3 running: delete one and it starts another
+  selector:
+    matchLabels: {app: gateway}
+  strategy:
+    rollingUpdate:       # an update replaces one Pod at a time, never below 3 ready
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels: {app: gateway}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: gateway
+          image: part-assistant-gateway:local   # loaded with: kind load docker-image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8100
+          env:
+            - name: PART_ASSISTANT_REDIS_URL
+              value: redis://redis:6379/0
+            - name: PART_ASSISTANT_UPSTREAM_LOCAL
+              value: http://ollama:11434/v1
+            - name: ANTHROPIC_API_KEY  # from a Secret made by hand, never in git
+              valueFrom:
+                secretKeyRef: {name: gateway-secrets, key: ANTHROPIC_API_KEY, optional: true}
+          readinessProbe:  # failing: no traffic is sent to this Pod
+            httpGet: {path: /healthz, port: 8100}
+            periodSeconds: 5
+          livenessProbe:   # failing for 30 s: the Pod is restarted
+            httpGet: {path: /healthz, port: 8100}
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: gateway-data
+---
+# One name for the 3 Pods: gateway:8100. Requests are spread across ready Pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+spec:
+  selector: {app: gateway}
+  ports:
+    - port: 8100
