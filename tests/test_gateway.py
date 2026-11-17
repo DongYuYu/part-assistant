@@ -1,13 +1,25 @@
 """Gateway tests: a fake upstream (httpx2.MockTransport), no network, no Claude calls."""
 
+import contextlib
 import json
+import os
+import time
+import uuid
 
 import httpx2
 import pytest
 from starlette.testclient import TestClient
 
 from part_assistant import gateway
-from part_assistant.gateway import Gateway, SSEUsage, add_key, connect, revoke_user
+from part_assistant.gateway import (
+    Gateway,
+    MemoryLimiter,
+    RedisLimiter,
+    SSEUsage,
+    add_key,
+    connect,
+    revoke_user,
+)
 
 CLAUDE_OK = {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
              "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn",
@@ -355,3 +367,73 @@ def test_gateway_imports_only_web_packages():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          check=True).stdout.strip()
     assert out == "[]"
+
+
+# --- rate limits shared by replicas (Redis)
+
+REDIS_URL = os.environ.get("PART_ASSISTANT_TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
+
+
+@pytest.fixture
+def redis_url():
+    import redis
+    try:
+        redis.Redis.from_url(REDIS_URL, socket_connect_timeout=0.5).ping()
+    except redis.RedisError:
+        pytest.skip(f"no Redis at {REDIS_URL} (docker compose up -d redis)")
+    return REDIS_URL
+
+
+@pytest.fixture
+def stack():
+    with contextlib.ExitStack() as s:
+        yield s
+
+
+def replicas(stack, tmp_path, n, make_limiter):
+    """n gateways sharing one key database, like n pods behind a load balancer.
+    `with TestClient` keeps one event loop per gateway, as uvicorn does: without it every
+    request gets a new loop, and a Redis connection can not move between loops."""
+    conn = connect(tmp_path / "gateway.db")
+    clients = [stack.enter_context(TestClient(Gateway(conn, client=httpx2.AsyncClient(
+        transport=httpx2.MockTransport(Upstream())), anthropic_key="sk-real",
+        upstream_anthropic="https://claude.test", limiter=make_limiter()).app()))
+        for _ in range(n)]
+    user = f"user-{uuid.uuid4().hex[:8]}"  # a fresh Redis key for every test run
+    return clients, add_key(conn, user, rpm=3), user
+
+
+def round_robin(clients, key, n):
+    return [ask_claude(clients[i % len(clients)], key).status_code for i in range(n)]
+
+
+def test_memory_limits_are_per_replica_so_users_get_more(stack, tmp_path):
+    """The problem Redis solves: 2 replicas, limit 3 per minute, 6 requests get through."""
+    clients, key, _ = replicas(stack, tmp_path, 2, MemoryLimiter)
+    assert round_robin(clients, key, 8).count(200) == 6
+
+
+def test_redis_limit_is_shared_by_replicas(stack, tmp_path, redis_url):
+    clients, key, _ = replicas(stack, tmp_path, 2, lambda: RedisLimiter(redis_url))
+    assert round_robin(clients, key, 6) == [200, 200, 200, 429, 429, 429]
+
+
+def test_redis_window_moves_on_and_keys_expire(stack, tmp_path, redis_url):
+    import redis
+    clients, key, user = replicas(stack, tmp_path, 1,
+                                  lambda: RedisLimiter(redis_url, window_ms=500))
+    assert round_robin(clients, key, 4) == [200, 200, 200, 429]
+    ttl = redis.Redis.from_url(redis_url).pttl(f"gateway:rpm:{user}")
+    assert 0 < ttl <= 500  # an idle user's counter disappears by itself
+    time.sleep(0.6)
+    assert round_robin(clients, key, 1) == [200]
+
+
+def test_redis_down_lets_requests_through_and_says_so(setup):
+    """Fail open: the rate limiter must not take the gateway down with it."""
+    client, gw, up, conn, _, _ = setup
+    gw.limiter = RedisLimiter("redis://127.0.0.1:1/0")  # nothing listens on port 1
+    key = add_key(conn, "erin", rpm=1)
+    assert round_robin([client], key, 3) == [200, 200, 200]  # no limit while Redis is down
+    assert metric(gw, "gateway_rate_limiter_errors_total") == 3
+    assert len(up.requests) == 3

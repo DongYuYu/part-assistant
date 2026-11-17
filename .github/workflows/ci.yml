@@ -21,6 +21,13 @@ jobs:
   test:
     runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to a new OS version
     timeout-minutes: 10
+    services:
+      redis:  # the gateway's shared rate-limit tests (skipped when there is no Redis)
+        image: redis:8.8.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s
+          --health-timeout 2s --health-retries 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 

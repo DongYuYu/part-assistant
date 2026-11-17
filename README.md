@@ -131,6 +131,7 @@ flowchart TB
 
 - ✅ vLLM 跑 Qwen3 4B / 1.7B 的原始、FP8、INT4（AWQ）版本，比較記憶體、TTFT、tokens/s 和黃金樣本分數：8 GB 筆電 GPU 上選 4B INT4（115 tokens/s，4 人同時 436 tokens/s）；4B BF16 放不進，模型大小對分數的影響遠大於量化。地端 prompt 加一條「照抄搜尋結果的出處」後，4B INT4 從 20/48 進步到 33/48（[數字](design/local-llm.md)）
 - ✅ 推論閘道：app 的所有模型呼叫都經過它（Claude 原樣轉發，地端走 OpenAI 格式），app 不用改程式，只改環境變數。每人一把閘道金鑰（只存雜湊）、每分鐘請求數和每天 token 配額、只放行有價格的模型、每次呼叫記下 token 和成本（串流也算）（[說明](design/gateway.md)）
+- ✅ 速率限制放 Redis：多個閘道副本共用同一個計數（Lua 腳本保證原子性），Redis 掛掉時放行並計數。實測兩個副本、每分鐘 4 次：不用 Redis 時 8 個都通過，用 Redis 時剛好 4 個（[說明](design/gateway.md#速率限制和-redis)）
 - ⬜ 輸入端 PII 遮罩、輸出端 schema 驗證
 - ✅ Prometheus 指標：閘道的 `/metrics` 提供請求數、錯誤、延遲分布、token、成本、被擋下的原因；不放使用者 label，避免時間序列爆量
 - ✅ Grafana 面板：請求數、錯誤率、P50 / P95 延遲、token、花費、被擋下的原因；資料來源和面板都寫成檔案放在 git（`compose.monitoring.yaml`）
@@ -200,7 +201,7 @@ docker compose run --rm app ask "PSU-3200-54V 滿載時的 hold-up time 是多�
 | `prepare` | 下載 datasheet、建立示範資料庫（已存在就不動）、切段、下載檢索模型、計算 embedding，完成後結束 |
 | `ollama`、`ollama-pull` | 降級用的地端模型（qwen3:4b） |
 | `app` | 回答問題：`ask "問題"`；也可以 `mcp`（MCP server）、`eval`（端到端評測，會花錢）、`bash` |
-| `gateway` | 推論閘道，在本機的 `127.0.0.1:8100`。只有 web 套件，映像檔 257 MB。發金鑰：`docker compose run --rm gateway add-key 名字`（[說明](design/gateway.md)） |
+| `gateway`、`redis` | 推論閘道，在本機的 `127.0.0.1:8100`；速率計數器放在 Redis。閘道只有 web 套件，映像檔 265 MB。發金鑰：`docker compose run --rm gateway add-key 名字`（[說明](design/gateway.md)） |
 
 實測（WSL2；GPU 是 RTX 5070 Laptop 8 GB）：
 

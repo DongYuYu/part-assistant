@@ -55,8 +55,17 @@ services:
         required: false
     environment:
       PART_ASSISTANT_UPSTREAM_LOCAL: http://ollama:11434/v1
+      PART_ASSISTANT_REDIS_URL: redis://redis:6379/0  # rate limits shared by replicas
     volumes:
       - gateway:/data  # keys (hashed) and usage
+    depends_on:
+      - redis
+
+  redis:  # rate-limit counters only: losing them resets a minute of counting, nothing more
+    image: redis:8.8.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]  # memory only, no disk
+    ports:
+      - "127.0.0.1:6379:6379"  # this machine only (tests, a gateway run with uv)
 
   prepare:  # data + retrieval models, then exits
     <<: *app

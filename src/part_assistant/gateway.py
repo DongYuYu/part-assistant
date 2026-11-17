@@ -26,10 +26,12 @@ Settings (environment variables of the gateway itself):
     PART_ASSISTANT_GATEWAY_DB         default data/processed/gateway.db
     PART_ASSISTANT_UPSTREAM_ANTHROPIC default https://api.anthropic.com
     PART_ASSISTANT_UPSTREAM_LOCAL     default http://127.0.0.1:11434/v1 (Ollama)
+    PART_ASSISTANT_REDIS_URL          e.g. redis://127.0.0.1:6379/0: rate limits shared by
+                                      every replica. Not set: counted in this process only.
 
-Limits of this version: rate-limit counters are in memory (one process; several replicas
-would share them in Redis), and a request is checked against the daily quota before it
-runs, so the last request of the day can go over by its own size.
+Limits of this version: keys and usage are in SQLite (one machine; Postgres for several),
+and a request is checked against the daily quota before it runs, so the last request of
+the day can go over by its own size.
 """
 
 import argparse
@@ -39,12 +41,14 @@ import os
 import secrets
 import sqlite3
 import time
+import uuid
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx2
+import redis.asyncio
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
@@ -54,6 +58,7 @@ from prometheus_client import (
     disable_created_metrics,
     generate_latest,
 )
+from redis.exceptions import RedisError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -204,6 +209,8 @@ class Metrics:
                                   "never sent upstream", ["route", "reason"], registry=r)
         self.in_flight = Gauge("gateway_in_flight_requests", "Calls waiting for upstream",
                                ["route"], registry=r)
+        self.limiter_errors = Counter("gateway_rate_limiter_errors", "Rate limiter "
+                                      "unreachable: the request was let through", registry=r)
         # Start every known series at 0. A series that first appears already at 3 has no
         # earlier sample, so increase()/rate() count those first 3 as 0: the first errors,
         # the ones an alert most needs, would be invisible.
@@ -216,12 +223,71 @@ class Metrics:
             self.cost.labels(model)
 
 
+# --- rate limits: requests per minute per user, sliding window
+
+WINDOW_MS = 60_000
+
+
+class MemoryLimiter:
+    """Counts in this process. Fine for one gateway; with 3 replicas each one counts on its
+    own, so a user gets 3 times the limit (tests/test_gateway.py shows it)."""
+
+    def __init__(self, clock=time.monotonic, window_ms: int = WINDOW_MS):
+        self.clock = clock
+        self.window = window_ms / 1000
+        self.recent: dict[str, deque[float]] = defaultdict(deque)  # user -> request times
+
+    async def allow(self, user_id: str, limit: int) -> bool:
+        times, now = self.recent[user_id], self.clock()
+        while times and now - times[0] >= self.window:
+            times.popleft()
+        if len(times) >= limit:
+            return False
+        times.append(now)
+        return True
+
+
+# One Lua script runs in Redis as a single step: no other replica can run between "count"
+# and "add" (two separate commands would let two replicas both see 29 of 30 and both add).
+# The time comes from Redis, so replicas whose clocks differ still agree.
+SLIDING_WINDOW = """
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local window = tonumber(ARGV[2])
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - window)
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[1]) then
+  return 0
+end
+redis.call('ZADD', KEYS[1], now, ARGV[3])
+redis.call('PEXPIRE', KEYS[1], window)
+return 1
+"""
+
+
+class RedisLimiter:
+    """Shared by every replica. One sorted set per user: one member per request, scored by
+    its time in ms. The key expires after a quiet window, so idle users cost no memory."""
+
+    def __init__(self, url: str, window_ms: int = WINDOW_MS):
+        # Short timeouts: a slow Redis must not make every request slow (we let it through).
+        self.client = redis.asyncio.from_url(url, socket_timeout=0.2,
+                                             socket_connect_timeout=0.2)
+        self.script = self.client.register_script(SLIDING_WINDOW)
+        self.window_ms = window_ms
+
+    async def allow(self, user_id: str, limit: int) -> bool:
+        member = uuid.uuid4().hex  # unique: two requests in the same ms are two members
+        return await self.script(keys=[f"gateway:rpm:{user_id}"],
+                                 args=[limit, self.window_ms, member]) == 1
+
+
 # --- the app
 
 class Gateway:
     def __init__(self, conn: sqlite3.Connection, client: httpx2.AsyncClient | None = None,
                  anthropic_key: str | None = None, upstream_anthropic: str | None = None,
-                 upstream_local: str | None = None, clock=time.monotonic):
+                 upstream_local: str | None = None, clock=time.monotonic,
+                 limiter: MemoryLimiter | RedisLimiter | None = None):
         self.conn = conn
         # Generous read timeout: a long answer from Claude, or a cold local model.
         self.client = client or httpx2.AsyncClient(timeout=httpx2.Timeout(600, connect=10))
@@ -230,8 +296,10 @@ class Gateway:
             "PART_ASSISTANT_UPSTREAM_ANTHROPIC", "https://api.anthropic.com")).rstrip("/")
         self.upstream_local = (upstream_local or os.environ.get(
             "PART_ASSISTANT_UPSTREAM_LOCAL", "http://127.0.0.1:11434/v1")).rstrip("/")
-        self.clock = clock
-        self.recent: dict[str, deque[float]] = defaultdict(deque)  # user -> request times
+        if limiter is None:
+            url = os.environ.get("PART_ASSISTANT_REDIS_URL")
+            limiter = RedisLimiter(url) if url else MemoryLimiter(clock)
+        self.limiter = limiter
         self.metrics = Metrics()
 
     # --- checks, in order: who, how often, how much
@@ -246,14 +314,14 @@ class Gateway:
         return self.conn.execute("SELECT * FROM gateway_keys WHERE key_hash = ? AND "
                                  "revoked_at IS NULL", (hash_key(key),)).fetchone()
 
-    def _over_rate(self, user: sqlite3.Row) -> bool:
-        times, now = self.recent[user["user_id"]], self.clock()
-        while times and now - times[0] >= 60:  # sliding window of 60 seconds
-            times.popleft()
-        if len(times) >= user["rpm"]:
-            return True
-        times.append(now)
-        return False
+    async def _over_rate(self, user: sqlite3.Row) -> bool:
+        try:
+            return not await self.limiter.allow(user["user_id"], user["rpm"])
+        except (RedisError, OSError):
+            # Fail open: a broken limiter must not take the whole gateway down. The daily
+            # token quota (in the database) still holds; the metric makes it visible.
+            self.metrics.limiter_errors.inc()
+            return False
 
     def tokens_today(self, user_id: str) -> int:
         day = datetime.now(UTC).date().isoformat()
@@ -309,7 +377,7 @@ class Gateway:
         if user is None:
             return self._reject(route, "auth", 401, "authentication_error",
                                 "missing or unknown gateway key")
-        if self._over_rate(user):
+        if await self._over_rate(user):
             return self._reject(route, "rate", 429, "rate_limit_error",
                                 f"over {user['rpm']} requests per minute", retry_after=60)
         if self.tokens_today(user["user_id"]) >= user["daily_tokens"]:

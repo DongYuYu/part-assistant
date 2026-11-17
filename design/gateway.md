@@ -52,7 +52,7 @@ flowchart LR
 檢查的順序是「便宜的先做」：
 
 1. **金鑰**：從 `x-api-key`（Anthropic SDK）或 `Authorization: Bearer`（OpenAI 格式）取得，算 sha256 後查表。不對就回 401，不會呼叫上游。
-2. **每分鐘請求數**：記憶體裡的 60 秒滑動視窗，每人各自計算。超過就回 429，加上 `retry-after: 60`。
+2. **每分鐘請求數**：60 秒滑動視窗，每人各自計算。有設定 `PART_ASSISTANT_REDIS_URL` 時，計數放在 Redis，所有副本共用；沒有設定時，放在程序自己的記憶體（見下面的「速率限制和 Redis」）。超過就回 429，加上 `retry-after: 60`。
 3. **今天的 token 數**：從用量表加總今天（UTC）的 token。用完就回 429，加上 `x-should-retry: false`（Anthropic SDK 看到這個 header 就不會自動重試，因為幾秒後重試也沒用）。
 4. **模型**：Claude 的模型必須在價格表（`agent.PRICES`）裡，否則回 400。沒有價格的模型就算不出成本，所以不放行。
 
@@ -66,6 +66,32 @@ flowchart LR
   - OpenAI 格式：閘道會加上 `stream_options.include_usage`，伺服器就會在最後一個 chunk 附上用量。
 - app 中途斷線的話，已經產生的部分照樣記帳。
 - Claude 的成本照價格表算，包含快取讀寫。地端記成 0（GPU 是固定成本，見下面的 Q&A）。
+
+### 速率限制和 Redis
+
+只有一個閘道時，計數器放在記憶體就夠了。但跑 3 個副本時，每個副本各算各的，每分鐘 30 次的使用者實際上能打 90 次。把計數器搬到 Redis，所有副本共用同一份。
+
+**做法**：每個使用者一個 sorted set（`gateway:rpm:<user>`），每個請求是一筆，分數是時間（毫秒）。一個 Lua 腳本做完四件事：
+
+1. 刪掉 60 秒前的紀錄（`ZREMRANGEBYSCORE`）。
+2. 數剩下幾筆（`ZCARD`）。
+3. 已經滿了就拒絕；還沒滿就加入這一筆（`ZADD`）。
+4. 設定 60 秒後過期（`PEXPIRE`）：使用者不再來，key 會自己消失。
+
+- **為什麼用 Lua 腳本**：Redis 執行腳本時，中間不會插入其他指令。如果分成幾個指令送出，兩個副本可能同時看到 29 筆，都判斷「還沒滿」，結果變成 31 筆（race condition）。
+- **時間用 Redis 的 `TIME`**：每台機器的時鐘可能差幾百毫秒，統一用 Redis 的時鐘。
+- **連線逾時 0.2 秒**：Redis 變慢時，不能拖慢每一個請求。
+- **Redis 不存硬碟**（`--save ""`）：計數器只需要記得 60 秒，Redis 重啟頂多讓計數歸零一分鐘。
+- **固定視窗（`INCR` 加 `EXPIRE`）比較簡單**，每人只要一個整數。但它在視窗交界處可能放行兩倍：在 0:59 打 30 次，1:00 又打 30 次。所以這裡選滑動視窗，代價是每人要存最多 rpm 筆紀錄。
+
+**實測**（2026-11-17，本機兩個閘道程序 8101 和 8102，金鑰每分鐘 4 次，輪流送 8 個請求到 Ollama）：
+
+| 設定 | 結果 |
+|---|---|
+| 不用 Redis | 8 個全部 200：每個副本各放行 4 個 |
+| 用 Redis（`redis:8.8.4-alpine`） | 前 4 個 200，後 4 個 429，不管送到哪個副本 |
+
+測試（`tests/test_gateway.py`）：兩個副本共用 Redis、視窗過後恢復、key 會過期、Redis 連不上時放行並計數。CI 有 Redis 服務，所以這些測試會在 CI 執行；本機沒有 Redis 時會自動跳過。
 
 ### 監控指標（`GET /metrics`）
 
@@ -157,7 +183,7 @@ docker compose up -d gateway                      # 127.0.0.1:8100；用服務�
 docker compose run --rm gateway usage
 ```
 
-- 映像檔是 `Dockerfile.gateway`，**257 MB**。app 的映像檔是 12.3 GB，大部分是 torch。
+- 映像檔是 `Dockerfile.gateway`，**265 MB**（加 Redis 套件之前是 257 MB）。app 的映像檔是 12.3 GB，大部分是 torch。
 - 它只安裝 `pyproject.toml` 裡的 `gateway` 依賴群組（版本照樣由 `uv.lock` 鎖定），只複製 `gateway.py`、`prices.py` 和 `__init__.py`。
 - 價格表因此從 `agent.py` 搬到獨立的 `prices.py`。原本閘道為了一張價格表 import `agent.py`，連帶載入了 numpy、rank_bm25、pymupdf 和 anthropic。現在有測試確保閘道不會 import 到這些。
 - 以非 root 使用者執行。port 只開在本機的 127.0.0.1。
@@ -173,7 +199,8 @@ docker compose run --rm gateway usage
 | **閘道不決定模型** | 降級需要的不只是換模型（還要改 prompt、拿掉開單工具、加警告），這些是業務邏輯，放在 agent | 法規類的規則（例如機密資料只能用地端）之後可以加在閘道 |
 | **金鑰只存 sha256** | 資料庫外洩也拿不到金鑰；這和存密碼的做法相同 | 金鑰忘了就只能發新的 |
 | **配額是請求前檢查** | 輸出長度事先不知道 | 每天的最後一個請求可能超過，最多超過一個請求的量（多數雲端服務也這樣做） |
-| **計數器放記憶體** | 一個程序，最簡單 | 多個副本時要改放 Redis，否則每個副本各算各的 |
+| **速率計數器放 Redis**（沒設定時放記憶體） | 多個副本共用同一個計數，才不會各算各的 | 多一個要維運的服務；Redis 掛掉時速率限制暫時失效（放行） |
+| **Redis 掛掉時放行（fail open）** | 速率限制是保護措施，不該變成新的故障點；每日配額存在資料庫，仍然有效 | 那段時間可能被多打一些；用 `gateway_rate_limiter_errors_total` 讓人看得到 |
 | **用 Starlette，不用 FastAPI** | MCP SDK 已經帶了 Starlette、uvicorn、httpx2，不必新增套件；閘道只有 3 個路徑，不需要自動產生文件 | 沒有自動的 OpenAPI 文件 |
 
 ## 五、實測
@@ -191,7 +218,7 @@ docker compose run --rm gateway usage
 
 ## 六、限制和下一步
 
-- **閘道是單點故障**：閘道掛掉時，Claude 和地端兩條路都斷，降級也沒用。正式環境要跑多個副本，放在負載平衡器後面（計數器改放 Redis）。
+- **閘道是單點故障**：閘道掛掉時，Claude 和地端兩條路都斷，降級也沒用。正式環境要跑多個副本，放在負載平衡器後面。速率計數器已經可以放 Redis，但金鑰和用量還在 SQLite，多台機器要改成 Postgres。
 - **配額用完時 agent 還是會試著降級**：429 對 agent 來說就是「Claude 暫時不能用」，所以會改走地端，而地端也經過同一個閘道，同樣被拒。結果正確（不會多花錢），只是多一次呼叫，錯誤訊息也不夠清楚。之後可以讓 agent 分辨「配額用完」和「Claude 忙」。
 - **身分**：閘道金鑰是一人一把，但還不是 SSO。正式系統要由 SSO 換發短效 token。
 - 還沒做的（第二階段後面幾步）：
