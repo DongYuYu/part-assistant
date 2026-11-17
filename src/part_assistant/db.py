@@ -9,6 +9,29 @@ from pathlib import Path
 
 DEFAULT_DB_PATH = Path(os.environ.get("PART_DB_PATH", "data/processed/factory.db"))
 
+# Every way a question can come in (audit_log.channel). 'api' came with server.py: an
+# older database is rebuilt to allow it (_widen_audit_channels).
+AUDIT_CHANNELS = ("cli", "mcp", "eval", "api")
+
+# Append-only: the triggers refuse UPDATE and DELETE, so a bug or a careless script can
+# not rewrite history.
+AUDIT_TABLE = f"""CREATE TABLE IF NOT EXISTS audit_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused, so gaps show deletions
+    at         TEXT NOT NULL,
+    user_id    TEXT NOT NULL CHECK (trim(user_id) != ''),
+    session_id TEXT NOT NULL,
+    channel    TEXT NOT NULL CHECK (channel IN ({", ".join(f"'{c}'" for c in AUDIT_CHANNELS)})),
+    action     TEXT NOT NULL CHECK (action IN ('ask', 'tool', 'approve')),
+    detail     TEXT NOT NULL CHECK (json_valid(detail))
+)"""
+AUDIT_EXTRAS = [
+    "CREATE INDEX IF NOT EXISTS audit_log_user ON audit_log (user_id, at)",
+    "CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log "
+    "BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END",
+    "CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log "
+    "BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END",
+]
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS parts (
     part_no     TEXT PRIMARY KEY,
@@ -52,25 +75,9 @@ CREATE TABLE IF NOT EXISTS users (
     clearance TEXT NOT NULL CHECK (clearance IN ('public', 'internal', 'confidential'))
 );
 
--- Who asked what, which tools ran, what changed. Append-only: the triggers refuse
--- UPDATE and DELETE, so a bug or a careless script can not rewrite history.
-CREATE TABLE IF NOT EXISTS audit_log (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused, so gaps show deletions
-    at         TEXT NOT NULL,
-    user_id    TEXT NOT NULL CHECK (trim(user_id) != ''),
-    session_id TEXT NOT NULL,
-    channel    TEXT NOT NULL CHECK (channel IN ('cli', 'mcp', 'eval')),
-    action     TEXT NOT NULL CHECK (action IN ('ask', 'tool', 'approve')),
-    detail     TEXT NOT NULL CHECK (json_valid(detail))
-);
-CREATE INDEX IF NOT EXISTS audit_log_user ON audit_log (user_id, at);
-
-CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
-BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
-
-CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
-BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+-- Who asked what, which tools ran, what changed: AUDIT_TABLE, added below.
 """
+SCHEMA += AUDIT_TABLE + ";\n" + "".join(stmt + ";\n" for stmt in AUDIT_EXTRAS)
 
 # Columns added after the first version. A database created before them gets them
 # with ALTER TABLE (no data lost). SQLite can not add a table CHECK that way, so only
@@ -97,3 +104,41 @@ def init_schema(conn: sqlite3.Connection) -> None:
             if column.split()[0] not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
     conn.commit()
+    _widen_audit_channels(conn)
+
+
+def _widen_audit_channels(conn: sqlite3.Connection) -> None:
+    """SQLite can not change a CHECK in place, so an audit_log made before a channel
+    existed is rebuilt: in one transaction, every row copied with its id, then the index
+    and the append-only triggers made again. (The triggers block UPDATE and DELETE, not
+    DROP TABLE: whoever can write the file can still drop the table, see
+    design/production-gap.md.)"""
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' "
+                       "AND name = 'audit_log'").fetchone()
+    if row is None or all(f"'{c}'" in row[0] for c in AUDIT_CHANNELS):
+        return
+    before = conn.execute("SELECT COUNT(*), COALESCE(MAX(id), 0) FROM audit_log").fetchone()
+    # The AUTOINCREMENT counter too: if ids 3-7 were deleted, a new table would hand out
+    # 3 again, and the gap that shows the deletion would be gone.
+    seq = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'audit_log'").fetchone()
+    try:
+        conn.execute("BEGIN IMMEDIATE")  # no other writer until the rebuild is done
+        conn.execute("ALTER TABLE audit_log RENAME TO audit_log_old")  # index, triggers go too
+        conn.execute(AUDIT_TABLE)
+        conn.execute("INSERT INTO audit_log SELECT * FROM audit_log_old")
+        after = conn.execute("SELECT COUNT(*), COALESCE(MAX(id), 0) FROM audit_log").fetchone()
+        if tuple(after) != tuple(before):
+            raise RuntimeError(f"audit_log rebuild copied {tuple(after)}, expected {tuple(before)}")
+        if seq is not None:
+            moved = conn.execute("UPDATE sqlite_sequence SET seq = max(seq, ?) "
+                                 "WHERE name = 'audit_log'", (seq[0],)).rowcount
+            if not moved:  # empty table: no counter row was made by the copy
+                conn.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_log', ?)",
+                             (seq[0],))
+        conn.execute("DROP TABLE audit_log_old")
+        for stmt in AUDIT_EXTRAS:  # after the drop: the old index still had the same name
+            conn.execute(stmt)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise

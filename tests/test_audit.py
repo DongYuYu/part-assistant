@@ -175,3 +175,85 @@ async def test_declined_mcp_ticket_is_audited_too(tools):
     assert e["detail"]["result"]["status"] == "not_created"
     assert "decline" in e["detail"]["result"]["reason"]
     assert e["detail"]["input"]["severity"] == "high"
+
+
+# --- channels (server.py added 'api')
+
+def test_every_channel_can_be_written(tools):
+    from part_assistant.db import AUDIT_CHANNELS
+    for channel in AUDIT_CHANNELS:
+        write(tools, channel=channel)
+    assert {e["channel"] for e in log(tools)} == {"cli", "mcp", "eval", "api"}
+
+
+def test_an_old_database_is_rebuilt_to_allow_api_with_every_row_kept(tmp_path):
+    """SQLite can not change a CHECK in place: the table is rebuilt, rows and ids kept,
+    and stays append-only."""
+    from part_assistant.db import AUDIT_TABLE
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(AUDIT_TABLE.replace(", 'api'", "") + ";" + """
+        CREATE INDEX audit_log_user ON audit_log (user_id, at);
+        CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log
+        BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+        INSERT INTO audit_log (at, user_id, session_id, channel, action, detail) VALUES
+            ('t1', 'alice', 's', 'cli', 'ask', '{}'), ('t2', 'bob', 's', 'mcp', 'tool', '{}');
+        DELETE FROM sqlite_sequence; INSERT INTO sqlite_sequence VALUES ('audit_log', 7);
+    """)
+    old.close()  # ids 1, 2 used; the counter says 7 was handed out (5 rows "missing")
+
+    conn = connect(path)
+    init_schema(conn)
+    rows = conn.execute("SELECT id, user_id, channel FROM audit_log").fetchall()
+    assert [tuple(r) for r in rows] == [(1, "alice", "cli"), (2, "bob", "mcp")]
+    audit.record(conn, "carol", "s", "api", "ask", {})
+    assert conn.execute("SELECT MAX(id) FROM audit_log").fetchone()[0] == 8  # no id reused
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute("DELETE FROM audit_log")
+    conn.rollback()
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute("UPDATE audit_log SET user_id = 'mallory'")
+    conn.rollback()
+    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+    assert {"audit_log_user", "audit_log_no_update", "audit_log_no_delete"} <= names
+    assert "audit_log_old" not in names
+    init_schema(conn)  # second start: nothing to do
+    assert conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == 3
+
+
+def test_http_service_question_is_audited_as_api(tmp_path):
+    """The real agent behind /ask (only Claude is fake): it writes the audit row, which a
+    fake agent would not. This is the test that would have caught channel 'api' missing."""
+    from starlette.testclient import TestClient
+
+    from part_assistant.server import build_app
+    conn_path = tmp_path / "t.db"
+    setup = connect(conn_path)
+    init_schema(setup)
+    seed(setup)
+
+    def make_agent():
+        return Agent(Tools(connect(conn_path)), FakeClient(
+            tool_use(("check_stock", {"part_no": "PSU-1600-54V"})), text("可用 513 顆。")),
+            channel="api")
+
+    with TestClient(build_app(make_agent, save=False)) as client:
+        r = client.post("/ask", json={"question": "PSU-1600-54V 還有多少？"},
+                        headers={"X-User": "alice"})
+    assert r.status_code == 200 and r.json()["answer"] == "可用 513 顆。"
+    [e] = audit.entries(setup, limit=10)
+    assert (e["user_id"], e["channel"], e["action"]) == ("alice", "api", "ask")
+
+
+def test_rebuilding_an_emptied_audit_table_keeps_its_counter(tmp_path):
+    """Every row deleted (say, ids 1-4): the next id must still be 5, not 1."""
+    from part_assistant.db import AUDIT_TABLE
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(AUDIT_TABLE.replace(", 'api'", "") + ";" +
+                      "INSERT INTO sqlite_sequence VALUES ('audit_log', 4);")
+    old.close()
+    conn = connect(path)
+    init_schema(conn)
+    audit.record(conn, "carol", "s", "api", "ask", {})
+    assert conn.execute("SELECT id FROM audit_log").fetchone()[0] == 5
