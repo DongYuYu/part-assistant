@@ -110,7 +110,10 @@ uv run python -m part_assistant.gateway revoke alice
 
 - `curl` 打 `/v1/chat/completions`：正常回答；用錯的金鑰回 401（OpenAI 格式），上游沒有收到請求。
 - **LocalAgent 不改程式**，只把 `PART_ASSISTANT_LOCAL_URL` 指向閘道：問「PSU-3200-54V 還有多少庫存？」，呼叫了 `lookup_part`、`check_stock`，回答 296。用量表記了 3 次模型呼叫，共 2,829 個輸入 token 和 1,970 個輸出 token。
-- Claude 這條路：測試裡用**真的 Anthropic SDK** 經過閘道（上游是假的），確認 `?beta=true`、`anthropic-version` 有帶過去，真的 key 換上去了，閘道金鑰沒有送出去。真的打 Claude 要花錢，還沒做。
+- Claude 這條路：測試裡用**真的 Anthropic SDK** 經過閘道（上游是假的），確認 `?beta=true`、`anthropic-version` 有帶過去，真的 key 換上去了，閘道金鑰沒有送出去。
+- **真的 agent 經過閘道問 Claude**（agent 程式沒改，只設 `ANTHROPIC_BASE_URL` 和閘道金鑰；真的 key 只有閘道讀得到）：問「PSU-3200-54V 還有多少庫存？」，呼叫 `check_stock`，回答 296，並列出三個倉庫。
+  - 閘道記了 2 次 Claude 呼叫，共 3,170 個輸入 token 和 214 個輸出 token，**$0.0130**。
+  - agent 自己的 trace 也是 **$0.0130**：兩邊各自計算，結果一致。
 
 閘道本身增加多少延遲還沒量，會在壓測那一步一起量。
 
