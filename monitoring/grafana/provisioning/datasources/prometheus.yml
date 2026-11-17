@@ -1,0 +1,10 @@
+# Grafana reads this at start: where to query. Both run on the host network.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus          # the dashboard JSON refers to this uid
+    type: prometheus
+    access: proxy            # Grafana's server queries Prometheus, not the browser
+    url: http://127.0.0.1:9090
+    isDefault: true
+    editable: false

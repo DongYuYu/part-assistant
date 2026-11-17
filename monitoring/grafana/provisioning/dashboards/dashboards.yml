@@ -1,0 +1,9 @@
+# Load every dashboard JSON in /var/lib/grafana/dashboards (mounted from the repo).
+apiVersion: 1
+providers:
+  - name: part-assistant
+    folder: part-assistant
+    type: file
+    allowUiUpdates: false    # the JSON in git is the source of truth
+    options:
+      path: /var/lib/grafana/dashboards

@@ -133,7 +133,7 @@ flowchart TB
 - ✅ 推論閘道：app 的所有模型呼叫都經過它（Claude 原樣轉發，地端走 OpenAI 格式），app 不用改程式，只改環境變數。每人一把閘道金鑰（只存雜湊）、每分鐘請求數和每天 token 配額、只放行有價格的模型、每次呼叫記下 token 和成本（串流也算）（[說明](design/gateway.md)）
 - ⬜ 輸入端 PII 遮罩、輸出端 schema 驗證
 - ✅ Prometheus 指標：閘道的 `/metrics` 提供請求數、錯誤、延遲分布、token、成本、被擋下的原因；不放使用者 label，避免時間序列爆量
-- ⬜ Grafana 面板
+- ✅ Grafana 面板：請求數、錯誤率、P50 / P95 延遲、token、花費、被擋下的原因；資料來源和面板都寫成檔案放在 git（`compose.monitoring.yaml`）
 - ⬜ 壓測，換算每千次請求的成本
 - ⬜（選做）Kubernetes manifest 範例
 
@@ -342,8 +342,8 @@ part-assistant/
 ├── Dockerfile         # 映像檔：只有 Python、鎖定的套件和程式碼，資料放 volume
 ├── compose.yaml       # docker compose：prepare、app、ollama
 ├── compose.gpu.yaml   # 選用：讓容器使用 NVIDIA GPU
-├── compose.monitoring.yaml  # 選用：Prometheus，抓閘道的 /metrics
-├── monitoring/        # Prometheus 設定
+├── compose.monitoring.yaml  # 選用：Prometheus 和 Grafana，監控閘道
+├── monitoring/        # Prometheus 設定、Grafana 資料來源和面板（JSON）
 ├── docker/entrypoint.sh  # 容器的指令：prepare / ask / mcp / eval
 ├── .mcp.json          # Claude Code 的 MCP 設定
 └── tests/             # pytest

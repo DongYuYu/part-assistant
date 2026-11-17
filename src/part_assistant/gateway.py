@@ -212,6 +212,8 @@ class Metrics:
             self.duration.labels(route)
             for reason in REJECT_REASONS:
                 self.rejections.labels(route, reason)
+        for model in PRICES:  # the only models that can cost money: "$0", not "No data"
+            self.cost.labels(model)
 
 
 # --- the app

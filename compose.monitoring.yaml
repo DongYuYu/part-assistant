@@ -3,6 +3,7 @@
 #   uv run --env-file .env python -m part_assistant.gateway serve    # on the host, port 8100
 #   docker compose -f compose.monitoring.yaml up -d
 #   open http://localhost:9090  (Status > Targets: gateway should be UP)
+#   open http://localhost:3000  (Grafana: dashboard "推論閘道", no login needed to view)
 #
 # network_mode: host lets Prometheus reach the gateway on the host's 127.0.0.1, so the
 # gateway does not have to listen on every interface. Data is kept in a volume (7 days).
@@ -20,5 +21,23 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus:/prometheus
 
+  grafana:
+    image: grafana/grafana:13.3.0
+    network_mode: host
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1      # this machine only
+      GF_AUTH_ANONYMOUS_ENABLED: "true"   # view without login; editing needs admin
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/gateway.json
+    volumes:
+      # Datasource and dashboard are files in git (provisioning), not clicks in the UI.
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana/data
+    depends_on:
+      - prometheus
+
 volumes:
   prometheus:
+  grafana:

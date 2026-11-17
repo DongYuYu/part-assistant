@@ -109,6 +109,17 @@ docker compose -f compose.monitoring.yaml up -d                     # Prometheus
 | 被擋下的原因 | `sum by (reason) (increase(gateway_rejections_total[10m]))` |
 | 閘道活著嗎 | `up{job="gateway"}` |
 
+### Grafana 面板
+
+`docker compose -f compose.monitoring.yaml up -d` 會一起啟動 Grafana 13.3.0：http://localhost:3000，不用登入就能看；要修改需要 admin。
+
+- **面板寫成檔案（provisioning）**：資料來源在 `monitoring/grafana/provisioning/`，面板在 `monitoring/grafana/dashboards/gateway.json`。不在網頁上點出來，因為那樣的設定只存在 Grafana 的資料庫，換一台電腦就沒了，也不能 code review。`allowUiUpdates: false`：以 git 裡的檔案為準。
+- **排版**：
+  - 第一排：4 個數字，回答「現在正常嗎」：閘道狀態、每秒請求數、上游錯誤率、過去 1 小時的 Claude 花費。
+  - 第二排：請求數和延遲**左右並排**。兩邊一起升高通常是排隊；只有延遲升高，是上游變慢。
+  - 第三、四排：每分鐘的 token、被擋下的原因、進行中的請求、每小時花費。
+- **花費的序列也先設為 0**：價格表裡的模型是已知的，所以沒有 Claude 流量時，面板顯示 $0，而不是看起來像壞掉的「No data」。
+
 **實測時踩到的三件事**（2026-11-17，Ollama qwen3:4b 經過閘道）：
 
 1. **第一次的錯誤不見了**：第一版只有在錯誤發生時才建立那條序列。Prometheus 第一次抓到時值已經是 3，沒有之前的值可以相減，`increase()` 就算成 0。改成啟動時先把已知的組合（route × reason）設為 0 之後，同樣送 3 次錯誤金鑰，就能查到 3.22。狀態碼和模型名稱無法事先列舉，所以 `requests_total` 的新序列還是有這個問題。告警可以改用 `requests_total` 加上 `rejections_total` 一起判斷，或者在 Grafana 的面板上看原始值。
@@ -171,7 +182,7 @@ uv run python -m part_assistant.gateway revoke alice
 - **配額用完時 agent 還是會試著降級**：429 對 agent 來說就是「Claude 暫時不能用」，所以會改走地端，而地端也經過同一個閘道，同樣被拒。結果正確（不會多花錢），只是多一次呼叫，錯誤訊息也不夠清楚。之後可以讓 agent 分辨「配額用完」和「Claude 忙」。
 - **身分**：閘道金鑰是一人一把，但還不是 SSO。正式系統要由 SSO 換發短效 token。
 - 還沒做的（第二階段後面幾步）：
-  - Grafana 面板和告警規則（指標已經有了，見上面）
+  - 告警規則（例如錯誤率 > 5% 持續 5 分鐘、閘道 down）
   - 輸入端的 PII 遮罩、輸出端的 schema 驗證
   - 用 k6 或 locust 壓測，換算每千次請求的成本（包括地端 GPU 攤提）
 
