@@ -1,6 +1,6 @@
 # 地端模型：vLLM 和量化比較
 
-一句話：**在 8 GB 的筆電 GPU 上，比較 Qwen3 的 4B 和 1.7B、原始和量化版本的記憶體、速度和黃金樣本分數。結論：降級用的地端模型選 4B INT4（AWQ）；但最好的地端模型也只答對約一半，所以平常一律用 Claude。**
+一句話：**在 8 GB 的筆電 GPU 上，比較 Qwen3 的 4B 和 1.7B、原始和量化版本的記憶體、速度和黃金樣本分數。結論：降級用的地端模型選 4B INT4（AWQ）。在地端 prompt 加一條「照抄搜尋結果的 source 當出處」之後，它從 20/48 進步到 33/48，仍遠低於 Claude 的 48/48，所以平常一律用 Claude。**
 
 程式：`src/part_assistant/local_agent.py`（OpenAI 格式，Ollama 和 vLLM 共用）、`src/part_assistant/bench_llm.py`（速度）、`src/part_assistant/eval_agent.py --local`（品質）。
 測試：`tests/test_fallback.py`、`tests/test_bench_llm.py`。
@@ -12,6 +12,7 @@
 - [三、記憶體](#三記憶體)
 - [四、速度](#四速度)
 - [五、品質（黃金樣本）](#五品質黃金樣本)
+- [五之一、改地端 prompt 之後](#五之一改地端-prompt-之後)
 - [六、結論](#六結論)
 - [七、量測時踩到的坑](#七量測時踩到的坑)
 - [八、限制](#八限制)
@@ -135,13 +136,37 @@ PART_ASSISTANT_RETRIEVAL_DEVICE=cpu PART_ASSISTANT_LOCAL_URL=http://127.0.0.1:80
 
 **4. 換成 OpenAI 格式後，Ollama 從 29 變成 26。** 差 3 題，在誤差範圍附近，不能斷定是格式造成的。
 
+## 五之一、改地端 prompt 之後
+
+上面的錯誤裡，最多的是照抄 `(file p.N)`。共用的 system prompt 第 1 條寫「Cite datasheet facts as (file p.N)」，`file` 是佔位符，Claude 會填入檔名，小模型卻照字抄。每筆搜尋結果本來就有現成的出處欄位，例如 `"source": "bel-tec3200-54.pdf p.2"`，所以只在**地端專用**的 `SYSTEM_LOCAL` 加了第 9 條：
+
+> To cite, copy the "source" field of the search result you used, exactly as written, e.g. (abc-1234.pdf p.3). Never write the word "file" instead of the real file name.
+
+- 範例檔名是虛構的，不是黃金樣本裡的檔案，避免把答案寫進 prompt。
+- Claude 的 prompt 沒改，所以 Claude 的 48/48 不用重跑（也不用花錢）。
+
+| 模型 | 改之前 | 改之後 | 照抄範本 | 沒附正確出處 | 數字錯或沒找到 | 沒呼叫工具 |
+|---|---|---|---|---|---|---|
+| vLLM 4B INT4（AWQ） | 20/48（42%） | **33/48（69%）** | 15 → **0** | 19 → 10 | 13 → 12 | 4 → 7 |
+| Ollama qwen3:4b Q4_K_M | 26/48（54%） | **30/48（63%）** | 2 → **0** | 16 → 10 | 17 → 20 | 8 → 5 |
+
+（2026-11-16 ～ 17，同樣的環境和指令。地端只有唯讀工具，3 題工單題一定失敗，所以地端最多 45/48。）
+
+- **照抄範本的錯誤完全消失**，兩個模型都是 0 次。
+- vLLM 4B INT4 進步最多（+13 題）：它原本的數字常常是對的，只是出處寫錯。表格題從 1/6 變成 6/6，相似型號題從 0/4 變成 3/4。
+- Ollama 只多 4 題：它本來就很少照抄，主要的錯是數字答錯（17 → 20，沒有改善）。
+- **改完之後，vLLM 4B INT4 反而比 Ollama 4B 高 3 題**（誤差範圍附近）。之前「vLLM 比較差」的差距，主要就是出處格式。
+- 4B FP8 和 1.7B 沒有用新 prompt 重跑，上一節是它們舊 prompt 的分數。
+
+**教訓**：寫給強模型的 prompt，換到小模型上要重新評測。佔位符、隱含的慣例，強模型會自動理解，小模型會照字面做。
+
 ## 六、結論
 
-1. **地端模型只當備援，不取代 Claude。** 最好的地端設定約答對一半，和 [routing.md](routing.md) 的結論一致。
+1. **地端模型只當備援，不取代 Claude。** 最好的地端設定（4B INT4，加上引用規則）答對 33/48，Claude 是 48/48，和 [routing.md](routing.md) 的結論一致。
 2. **8 GB 的卡上，降級模型選 4B INT4（AWQ）on vLLM。**
    - 和 4B FP8 比：分數差 3 題（誤差範圍），但快 60%、可放的 token 多 2.4 倍，請求可以到 16k。
    - 和 1.7B 比：分數是兩倍，記憶體還比較小。
-   - 和 Ollama 比：分數少 6 題（主要是引用格式），但多人同時使用時總量是 3 到 5 倍。只有一個人用時，Ollama 也夠用。
+   - 和 Ollama 比：加上引用規則後分數多 3 題（33 vs 30，誤差範圍附近），多人同時使用時總量是 3 到 5 倍。只有一個人用時，Ollama 也夠用。
 3. **檢索模型和 LLM 不能共用這張 8 GB 的卡**，正式部署要分開。
 
 ## 七、量測時踩到的坑
@@ -171,4 +196,4 @@ FP8 比較接近原始模型，理論上應該比較準；這次多 3 題，在�
 單人時差不多（115 vs 81 tokens/s，量化格式也不同）。差別在多人同時：vLLM 用 continuous batching 和 PagedAttention，把多個請求放在同一批計算；Ollama 預設一次處理一個。
 
 ### Q：照抄 `(file p.N)` 可以修嗎？
-可以試：只在地端專用的 `SYSTEM_LOCAL` 說明出處要填真正的檔名（範例用虛構的檔名，避免針對黃金樣本調 prompt）。只改地端的 prompt，不影響 Claude，不用重跑付費評測。還沒做。
+已經修了，見[五之一](#五之一改地端-prompt-之後)：只在地端專用的 `SYSTEM_LOCAL` 要求照抄搜尋結果的 `source` 欄位，照抄範本從 15 次變成 0 次，4B INT4 從 20/48 變成 33/48。

@@ -129,6 +129,14 @@ def test_local_model_is_only_offered_read_only_tools(tools):
     assert "can NOT be created" in local.bodies[0]["messages"][0]["content"]
 
 
+def test_local_prompt_says_to_copy_the_real_source(tools):
+    chat = FakeOllama(ol_text("ok"))
+    LocalAgent(tools, chat=chat).run("q")
+    system = chat.bodies[0]["messages"][0]["content"]
+    assert 'copy the "source" field' in system
+    assert "bel-tec3200" not in system  # the example must not be a golden-set file
+
+
 def test_local_model_can_not_create_a_ticket_even_if_it_tries(tools):
     local = FakeOllama(ol_tool("create_ticket", LOW), ol_text("工單已開立"))
     agent, _ = make(tools, anthropic.APIConnectionError(request=REQ), local=local)

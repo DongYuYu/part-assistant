@@ -129,7 +129,7 @@ flowchart TB
 
 **第二階段：推論閘道**
 
-- ✅ vLLM 跑 Qwen3 4B / 1.7B 的原始、FP8、INT4（AWQ）版本，比較記憶體、TTFT、tokens/s 和黃金樣本分數：8 GB 筆電 GPU 上選 4B INT4（20/48，115 tokens/s，4 人同時 436 tokens/s）；4B BF16 放不進，模型大小對分數的影響遠大於量化（[數字](design/local-llm.md)）
+- ✅ vLLM 跑 Qwen3 4B / 1.7B 的原始、FP8、INT4（AWQ）版本，比較記憶體、TTFT、tokens/s 和黃金樣本分數：8 GB 筆電 GPU 上選 4B INT4（115 tokens/s，4 人同時 436 tokens/s）；4B BF16 放不進，模型大小對分數的影響遠大於量化。地端 prompt 加一條「照抄搜尋結果的出處」後，4B INT4 從 20/48 進步到 33/48（[數字](design/local-llm.md)）
 - ⬜ 每個使用者的速率限制和 token 配額、輸入端 PII 遮罩、輸出端 schema 驗證
 - ⬜ Prometheus 指標加 Grafana 面板
 - ⬜ 壓測，換算每千次請求的成本

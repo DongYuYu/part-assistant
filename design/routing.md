@@ -27,6 +27,8 @@
 | qwen3:4b（開思考） | 29/48（60%） | 1096 秒 | 22 秒 | $0 |
 | qwen3:4b-instruct（不思考） | 18/48（38%） | 80 秒 | 1.6 秒 | $0 |
 
+（2026-11-14 用 Ollama 原生 API 量的。之後地端改走 OpenAI 格式，並在地端 prompt 加了「照抄搜尋結果的出處」：Ollama qwen3:4b 30/48、vLLM Qwen3-4B INT4 33/48，見 [local-llm.md](local-llm.md)。結論不變。）
+
 依類別（開思考 / 不思考），以及這類題目佔 Claude 成本的比例：
 
 | 類別 | 開思考 | 不思考 | 佔 Claude 成本 |

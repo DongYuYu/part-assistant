@@ -1,9 +1,10 @@
 """Fallback when Claude is unavailable: the same kind of loop, on a local model.
 
-Measured on the golden set (RTX 5070 Laptop, see design/routing.md): qwen3:4b with
-thinking scores 29/48 vs Claude 48/48, and once claimed it had opened a ticket without
-calling the tool. So in fallback mode the local model gets READ-ONLY tools: create_ticket
-is not offered, and refused here even if the model calls it anyway.
+Measured on the golden set (RTX 5070 Laptop, see design/routing.md and local-llm.md):
+qwen3:4b with thinking scored 29/48 vs Claude 48/48, and once claimed it had opened a
+ticket without calling the tool. With rule 9 below: Qwen3-4B AWQ on vLLM 33/48.
+So in fallback mode the local model gets READ-ONLY tools: create_ticket is not offered,
+and refused here even if the model calls it anyway.
 
 Speaks the OpenAI chat-completions format, which both Ollama (/v1) and vLLM serve, so the
 same code runs on either server, and through the gateway later.
@@ -34,9 +35,15 @@ from part_assistant.tools import TOOL_SCHEMAS, Tools
 DEFAULT_MODEL = "qwen3:4b"
 READ_ONLY = ("search_docs", "lookup_part", "check_stock")
 
+# Rule 9: "(file p.N)" in rule 1 is a placeholder. Claude fills it in; small local models
+# copied it word for word in 10-15 of 48 golden answers (design/local-llm.md). Each search
+# result already has a ready-made "source" field, so the rule says: copy that. The example
+# file name is made up on purpose, so it can not leak a golden-set answer.
 SYSTEM_LOCAL = SYSTEM + """
 8. Tickets can NOT be created right now (the main model is unavailable). If the user asks
-   for a ticket, say it cannot be opened now and ask them to try again later."""
+   for a ticket, say it cannot be opened now and ask them to try again later.
+9. To cite, copy the "source" field of the search result you used, exactly as written,
+   e.g. (abc-1234.pdf p.3). Never write the word "file" instead of the real file name."""
 
 # Anthropic tool format -> OpenAI ("function") format; the JSON schema inside is the same.
 LOCAL_TOOLS = [{"type": "function", "function": {
