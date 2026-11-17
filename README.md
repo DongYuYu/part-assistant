@@ -94,7 +94,7 @@ flowchart TB
 | **MCP Server** | 把工具包成標準協定 | 同一組工具可以接到 Claude Desktop、Claude Code，或我們自己的 agent |
 | **模型路由** | 依任務難度選模型 | 簡單的工作交給地端小模型，省成本；困難的交給雲端模型，顧品質；雲端失敗時退回地端 |
 | **Trace** | 記錄每次模型和工具呼叫 | 能回答「這題為什麼答錯」和「每題花多少錢」 |
-| **推論閘道**（第二階段） | OpenAI 相容的 gateway | 速率限制、token 配額、PII 遮罩、監控，所有模型呼叫都經過它 |
+| **推論閘道**（第二階段） | 所有模型呼叫都經過它；真的 API key 只放在這裡 | 誰在用、用了多少、有沒有超額，一個地方管，雲端和地端模型都一樣 |
 
 ---
 
@@ -130,7 +130,8 @@ flowchart TB
 **第二階段：推論閘道**
 
 - ✅ vLLM 跑 Qwen3 4B / 1.7B 的原始、FP8、INT4（AWQ）版本，比較記憶體、TTFT、tokens/s 和黃金樣本分數：8 GB 筆電 GPU 上選 4B INT4（115 tokens/s，4 人同時 436 tokens/s）；4B BF16 放不進，模型大小對分數的影響遠大於量化。地端 prompt 加一條「照抄搜尋結果的出處」後，4B INT4 從 20/48 進步到 33/48（[數字](design/local-llm.md)）
-- ⬜ 每個使用者的速率限制和 token 配額、輸入端 PII 遮罩、輸出端 schema 驗證
+- ✅ 推論閘道：app 的所有模型呼叫都經過它（Claude 原樣轉發，地端走 OpenAI 格式），app 不用改程式，只改環境變數。每人一把閘道金鑰（只存雜湊）、每分鐘請求數和每天 token 配額、只放行有價格的模型、每次呼叫記下 token 和成本（串流也算）（[說明](design/gateway.md)）
+- ⬜ 輸入端 PII 遮罩、輸出端 schema 驗證
 - ⬜ Prometheus 指標加 Grafana 面板
 - ⬜ 壓測，換算每千次請求的成本
 - ⬜（選做）Kubernetes manifest 範例
@@ -321,6 +322,7 @@ part-assistant/
 │   ├── agent.py       # agent 迴圈：步數和成本上限、trace、高嚴重度要人工確認
 │   ├── local_agent.py # Claude 無法使用時的降級：地端模型（Ollama 或 vLLM），只有唯讀工具
 │   ├── bench_llm.py   # 地端模型的速度量測（TTFT、tokens/s、多人同時）
+│   ├── gateway.py     # 推論閘道：金鑰、速率限制、token 配額、用量和成本
 │   ├── circuit.py     # 斷路器：Claude 連續失敗幾次後，暫時直接走降級
 │   ├── audit.py       # 稽核紀錄：誰問了什麼、呼叫了哪些工具（只能新增）
 │   ├── access.py      # 權限等級和現行版本：搜尋時誰能看到哪些段落
@@ -501,6 +503,15 @@ why = "First row of a centered merged cell; forward-fill would label it iTHD (15
 - **量測時抓到批改器的盲點**：推理過程漏進回答、照抄 `(file p.N)` 範本，回答裡的數字是對的，所以關鍵字檢查抓不到；批改器因此加了格式檢查。
 
 > 完整數字和常見問題見 [design/routing.md](design/routing.md)。
+
+### 推論閘道：管「誰用了多少」，不管「用哪個模型」
+
+- **不轉換格式**：Anthropic 格式原樣轉給 Claude，OpenAI 格式轉給 vLLM / Ollama。轉換會丟掉 strict tool、prompt caching 等功能；而且降級本來就要換 prompt 和工具，單純換模型名稱也不夠。
+- **app 不用改程式**：Anthropic SDK 本來就讀 `ANTHROPIC_BASE_URL`；app 拿的是閘道金鑰，真的 key 只在閘道。
+- **錯誤用 app 預期的格式回傳**：上游 5xx、連不上、429 照樣讓 agent 降級；每天配額用完時加上 `x-should-retry: false`，SDK 就不會白白重試。
+- **串流也記帳**：轉發的同時解析 SSE 事件取得 token 數，app 中途斷線也照記。
+
+> 用法和常見問題見 [design/gateway.md](design/gateway.md)。
 
 ### 為什麼選 pymupdf4llm？
 

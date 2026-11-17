@@ -1087,12 +1087,15 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
+    { name = "httpx2" },
     { name = "mcp" },
     { name = "pymupdf" },
     { name = "pymupdf4llm" },
     { name = "rank-bm25" },
     { name = "sentence-transformers" },
+    { name = "starlette" },
     { name = "torch" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -1104,12 +1107,15 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=2.8.0" },
+    { name = "httpx2", specifier = ">=2.16.0" },
     { name = "mcp", specifier = ">=2.3.0" },
     { name = "pymupdf", specifier = ">=2.1" },
     { name = "pymupdf4llm", specifier = ">=2.1" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
     { name = "sentence-transformers", specifier = ">=6.3.0" },
+    { name = "starlette", specifier = ">=1.10.0" },
     { name = "torch", specifier = ">=2.11.0", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 
 [package.metadata.requires-dev]

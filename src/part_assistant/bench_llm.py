@@ -30,7 +30,7 @@ from pathlib import Path
 
 from part_assistant.agent import SYSTEM
 from part_assistant.chunk import load_chunks
-from part_assistant.local_agent import DEFAULT_MODEL, local_url
+from part_assistant.local_agent import DEFAULT_MODEL, local_headers, local_url
 
 RUNS_DIR = Path("runs")
 QUESTION = "PSU 的 hold-up time 是多少？請根據資料回答並附出處。"
@@ -60,8 +60,7 @@ def one_request(url: str, model: str, messages: list[dict], max_tokens: int) -> 
             "chat_template_kwargs": {"enable_thinking": False},  # vLLM
             "reasoning_effort": "none",  # Ollama
             "ignore_eos": True}  # vLLM: always write max_tokens, so models compare fairly
-    req = urllib.request.Request(url, json.dumps(body).encode(),
-                                 {"Content-Type": "application/json"})
+    req = urllib.request.Request(url, json.dumps(body).encode(), local_headers())
     t0 = time.perf_counter()
     first = None
     usage: dict = {}

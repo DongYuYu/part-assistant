@@ -14,6 +14,8 @@ Settings (environment variables):
     PART_ASSISTANT_LOCAL_URL     base URL of the server, e.g. http://127.0.0.1:8000/v1 (vLLM)
     OLLAMA_HOST                  used when PART_ASSISTANT_LOCAL_URL is not set: <host>/v1
                                  (default 127.0.0.1:11434, same variable the ollama CLI uses)
+    PART_ASSISTANT_LOCAL_API_KEY sent as "Authorization: Bearer ...": the gateway key when
+                                 PART_ASSISTANT_LOCAL_URL points at the gateway
 
 Ollama's OpenAI endpoint can not set the context length per request and defaults to 4096
 tokens, too short for 5 search passages: start Ollama with OLLAMA_CONTEXT_LENGTH=16384.
@@ -61,9 +63,15 @@ def local_url() -> str:
     return base.rstrip("/") + "/chat/completions"
 
 
+def local_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if key := os.environ.get("PART_ASSISTANT_LOCAL_API_KEY"):
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
+
+
 def local_chat(body: dict) -> dict:
-    req = urllib.request.Request(local_url(), json.dumps(body).encode(),
-                                 {"Content-Type": "application/json"})
+    req = urllib.request.Request(local_url(), json.dumps(body).encode(), local_headers())
     with urllib.request.urlopen(req, timeout=300) as r:
         return json.load(r)
 
