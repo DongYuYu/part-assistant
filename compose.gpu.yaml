@@ -15,3 +15,4 @@ services:
   ollama: *gpu
   prepare: *gpu
   app: *gpu
+  api: *gpu

@@ -43,6 +43,34 @@ services:
         condition: service_healthy
     restart: "no"
 
+  api:  # the assistant as an HTTP service: POST /ask (docker compose --profile api up -d)
+    <<: *app
+    profiles: ["api"]
+    command: ["api"]
+    ports:
+      - "127.0.0.1:8000:8000"  # this machine only: X-User is trusted, so no direct users
+    environment:
+      # No env_file: this service never sees the real ANTHROPIC_API_KEY. It holds a
+      # gateway key (docker compose run --rm gateway add-key api, then put it in .env as
+      # PART_ASSISTANT_GATEWAY_KEY), and every model call goes through the gateway.
+      ANTHROPIC_BASE_URL: http://gateway:8100
+      ANTHROPIC_API_KEY: ${PART_ASSISTANT_GATEWAY_KEY:-}
+      PART_ASSISTANT_LOCAL_URL: http://gateway:8100/v1
+      PART_ASSISTANT_LOCAL_API_KEY: ${PART_ASSISTANT_GATEWAY_KEY:-}
+      PART_ASSISTANT_LOCAL_MODEL: ${PART_ASSISTANT_LOCAL_MODEL:-qwen3:4b}
+      HF_HUB_OFFLINE: "1"
+    healthcheck:  # the port opens only after the models are loaded (~14 s on a GPU)
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 5s
+      timeout: 3s
+      start_period: 120s
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_started
+
   gateway:  # inference gateway: keys, limits, metering (design/gateway.md)
     build:
       context: .

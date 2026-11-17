@@ -5,6 +5,7 @@
 #                    chunk, download the retrieval models, embed. Safe to run again.
 #   ask "question"   ask the agent (needs ANTHROPIC_API_KEY, costs money)
 #   mcp              MCP server over stdin/stdout
+#   api              HTTP service: POST /ask on port 8000 (models load once at start)
 #   eval [options]   end-to-end golden-set eval (costs money)
 #   anything else    run it as a command, e.g. bash
 set -eu
@@ -30,12 +31,15 @@ print('embedded', e.n_embedded, 'new chunks')"
   mcp)
     exec python -m part_assistant.mcp_server
     ;;
+  api)
+    exec python -m part_assistant.server --host 0.0.0.0
+    ;;
   eval)
     shift
     exec python -m part_assistant.eval_agent "$@"
     ;;
   "")
-    echo "usage: prepare | ask \"question\" | mcp | eval [options] | <command>" >&2
+    echo "usage: prepare | ask \"question\" | mcp | api | eval [options] | <command>" >&2
     exit 2
     ;;
   *)
