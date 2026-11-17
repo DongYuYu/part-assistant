@@ -136,6 +136,7 @@ flowchart TB
 - ✅ Prometheus 指標：閘道的 `/metrics` 提供請求數、錯誤、延遲分布、token、成本、被擋下的原因；不放使用者 label，避免時間序列爆量
 - ✅ Grafana 面板：請求數、錯誤率、P50 / P95 延遲、token、花費、被擋下的原因；資料來源和面板都寫成檔案放在 git（`compose.monitoring.yaml`）
 - ⬜ 壓測，換算每千次請求的成本
+- ✅ HTTP 服務 `POST /ask`：檢索模型只在啟動時載入一次（13.6 秒；之後每次搜尋 0.6 秒）。Docker 裡的 `api` 只拿到閘道金鑰，所有模型呼叫都經過閘道；實測一題庫存題 5 秒、$0.013，稽核紀錄記成 `api`（[說明](design/api.md)）
 - ✅ Kubernetes（kind）：閘道 3 個副本、共用 Redis 的速率限制、健康檢查、Secret。實測刪掉一個 Pod，1 秒內就補回；8 個請求分散到 3 個 Pod，剛好放行 4 個（[說明](k8s/README.md)）
 
 **第三階段（選做）**：SECOM 半導體良率預測
@@ -201,6 +202,7 @@ docker compose run --rm app ask "PSU-3200-54V 滿載時的 hold-up time 是多�
 | `prepare` | 下載 datasheet、建立示範資料庫（已存在就不動）、切段、下載檢索模型、計算 embedding，完成後結束 |
 | `ollama`、`ollama-pull` | 降級用的地端模型（qwen3:4b） |
 | `app` | 回答問題：`ask "問題"`；也可以 `mcp`（MCP server）、`eval`（端到端評測，會花錢）、`bash` |
+| `api` | 選用（`--profile api`）：HTTP 服務 `POST /ask`，在本機的 `127.0.0.1:8000`。只拿到閘道金鑰（寫在 `.env` 的 `PART_ASSISTANT_GATEWAY_KEY`），不讀真的 API key（[說明](design/api.md)） |
 | `gateway`、`redis` | 推論閘道，在本機的 `127.0.0.1:8100`；速率計數器放在 Redis。閘道只有 web 套件，映像檔 265 MB。發金鑰：`docker compose run --rm gateway add-key 名字`（[說明](design/gateway.md)） |
 
 實測（WSL2；GPU 是 RTX 5070 Laptop 8 GB）：
@@ -333,6 +335,7 @@ part-assistant/
 │   ├── eval_agent.py  # 端到端評測：真的 agent 回答黃金樣本，逐題批改
 │   ├── eval_injection.py # 間接 prompt injection 測試：假文件裡藏惡意指令
 │   ├── mcp_server.py  # 同一組工具包成 MCP server
+│   ├── server.py      # HTTP 服務：POST /ask，檢索模型只在啟動時載入一次
 │   └── golden.py      # 讀取黃金樣本、比對答案
 ├── data/
 │   ├── sources.toml   # datasheet 清單：網址和 SHA-256（PDF 本身不進 git）

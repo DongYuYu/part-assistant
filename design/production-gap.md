@@ -55,7 +55,7 @@
 | 文件格式 | 文字型 PDF、Markdown | 掃描檔（OCR）、中文文件、圖面、試算表 |
 | 監控 | 有 trace（耗時、token、成本）；推論閘道有每人的速率限制、token 配額、用量表，以及 Prometheus 指標和 Grafana 面板（[gateway.md](gateway.md)）；沒有告警 | 告警；閘道跑多個副本（速率計數器已經可以放 Redis，金鑰和用量要從 SQLite 改到 Postgres） |
 | 資料保護 | 向量快取沒加密，裡面有所有文件；稽核用 trigger 保護，但能直接改資料庫檔案的人還是能刪 | 依權限分開存放或加密；稽核紀錄送到只能新增的外部儲存，並訂保存期限 |
-| 介面 | CLI、MCP host | 網頁，或接到使用者已經在用的通訊工具 |
+| 介面 | CLI、MCP host、HTTP 服務（`POST /ask`，[api.md](api.md)），身分先用 `X-User` 暫代 | 網頁，或接到使用者已經在用的通訊工具；身分由 SSO 驗證 |
 
 ## 五、先做哪個
 
