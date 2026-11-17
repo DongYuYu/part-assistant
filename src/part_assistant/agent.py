@@ -18,6 +18,7 @@ from pathlib import Path
 import anthropic
 
 from part_assistant import audit
+from part_assistant.prices import PRICES
 from part_assistant.tools import TOOL_SCHEMAS, Tools
 
 MODEL = "claude-opus-5-5"
@@ -32,9 +33,6 @@ MAX_STEPS = 8
 MAX_COST_USD = 0.50
 TRACE_DIR = Path("traces")
 
-# USD per million tokens (Claude API list price, checked 2026-11-13).
-PRICES = {"claude-opus-5-5": {"input": 4.00, "output": 20.00,
-                              "cache_read": 0.20, "cache_write": 5.00}}
 
 SYSTEM = """\
 You are a parts assistant for a server power-supply factory. Answer in Traditional Chinese (Taiwan).

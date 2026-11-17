@@ -59,7 +59,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from part_assistant.agent import PRICES
+from part_assistant.prices import PRICES
 
 DEFAULT_DB = Path(os.environ.get("PART_ASSISTANT_GATEWAY_DB", "data/processed/gateway.db"))
 DEFAULT_RPM = 30

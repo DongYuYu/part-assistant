@@ -149,6 +149,19 @@ uv run python -m part_assistant.gateway usage [--day 2026-11-17]
 uv run python -m part_assistant.gateway revoke alice
 ```
 
+用 Docker 跑（`compose.yaml` 的 `gateway` 服務）：
+
+```bash
+docker compose run --rm gateway add-key alice     # 金鑰存在 volume 裡
+docker compose up -d gateway                      # 127.0.0.1:8100；用服務名稱連 ollama
+docker compose run --rm gateway usage
+```
+
+- 映像檔是 `Dockerfile.gateway`，**257 MB**。app 的映像檔是 12.3 GB，大部分是 torch。
+- 它只安裝 `pyproject.toml` 裡的 `gateway` 依賴群組（版本照樣由 `uv.lock` 鎖定），只複製 `gateway.py`、`prices.py` 和 `__init__.py`。
+- 價格表因此從 `agent.py` 搬到獨立的 `prices.py`。原本閘道為了一張價格表 import `agent.py`，連帶載入了 numpy、rank_bm25、pymupdf 和 anthropic。現在有測試確保閘道不會 import 到這些。
+- 以非 root 使用者執行。port 只開在本機的 127.0.0.1。
+
 `PART_ASSISTANT_UPSTREAM_LOCAL` 預設是 Ollama（`http://127.0.0.1:11434/v1`）。用量資料庫預設是 `data/processed/gateway.db`，可以用 `PART_ASSISTANT_GATEWAY_DB` 改。
 
 ## 四、設計取捨

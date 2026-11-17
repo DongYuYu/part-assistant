@@ -47,6 +47,14 @@ dev = [
     "pytest>=9.2.0",
     "ruff>=0.17.4",
 ]
+# Only what the gateway image needs (Dockerfile.gateway). Also in the main list above,
+# so the full project runs the gateway too. Versions come from uv.lock as usual.
+gateway = [
+    "httpx2>=2.16.0",
+    "prometheus-client>=0.26.0",
+    "starlette>=1.10.0",
+    "uvicorn>=0.54.0",
+]
 
 # torch must come from PyTorch's own index: the cu128 build is the first to support
 # Blackwell GPUs (RTX 50xx). explicit = true: only torch is looked up there.

@@ -342,3 +342,16 @@ def test_known_series_start_at_zero_so_the_first_error_is_not_lost(setup):
     assert 'gateway_rejections_total{reason="quota",route="local"} 0.0' in page
     assert 'gateway_in_flight_requests{route="local"} 0.0' in page
     assert 'gateway_cost_usd_total{model="claude-opus-5-5"} 0.0' in page
+
+
+def test_gateway_imports_only_web_packages():
+    """The gateway image (Dockerfile.gateway) has only the 'gateway' dependency group:
+    importing the agent or retrieval code from here would break it."""
+    import subprocess
+    import sys
+    code = ("import sys, part_assistant.gateway; "
+            "print([m for m in ('numpy', 'rank_bm25', 'pymupdf', 'anthropic', 'torch', 'mcp') "
+            "if m in sys.modules])")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         check=True).stdout.strip()
+    assert out == "[]"

@@ -200,6 +200,7 @@ docker compose run --rm app ask "PSU-3200-54V 滿載時的 hold-up time 是多�
 | `prepare` | 下載 datasheet、建立示範資料庫（已存在就不動）、切段、下載檢索模型、計算 embedding，完成後結束 |
 | `ollama`、`ollama-pull` | 降級用的地端模型（qwen3:4b） |
 | `app` | 回答問題：`ask "問題"`；也可以 `mcp`（MCP server）、`eval`（端到端評測，會花錢）、`bash` |
+| `gateway` | 推論閘道，在本機的 `127.0.0.1:8100`。只有 web 套件，映像檔 257 MB。發金鑰：`docker compose run --rm gateway add-key 名字`（[說明](design/gateway.md)） |
 
 實測（WSL2；GPU 是 RTX 5070 Laptop 8 GB）：
 
@@ -323,7 +324,8 @@ part-assistant/
 │   ├── agent.py       # agent 迴圈：步數和成本上限、trace、高嚴重度要人工確認
 │   ├── local_agent.py # Claude 無法使用時的降級：地端模型（Ollama 或 vLLM），只有唯讀工具
 │   ├── bench_llm.py   # 地端模型的速度量測（TTFT、tokens/s、多人同時）
-│   ├── gateway.py     # 推論閘道：金鑰、速率限制、token 配額、用量和成本
+│   ├── gateway.py     # 推論閘道：金鑰、速率限制、token 配額、用量和成本、/metrics
+│   ├── prices.py      # Claude 價格表（agent 和閘道共用；獨立出來讓閘道不必載入 agent）
 │   ├── circuit.py     # 斷路器：Claude 連續失敗幾次後，暫時直接走降級
 │   ├── audit.py       # 稽核紀錄：誰問了什麼、呼叫了哪些工具（只能新增）
 │   ├── access.py      # 權限等級和現行版本：搜尋時誰能看到哪些段落
@@ -340,7 +342,8 @@ part-assistant/
 ├── eval/
 │   └── golden.toml    # 黃金樣本 50 題
 ├── Dockerfile         # 映像檔：只有 Python、鎖定的套件和程式碼，資料放 volume
-├── compose.yaml       # docker compose：prepare、app、ollama
+├── Dockerfile.gateway # 閘道的輕量映像檔：只有 gateway 依賴群組和 3 個 .py 檔
+├── compose.yaml       # docker compose：prepare、app、ollama、gateway
 ├── compose.gpu.yaml   # 選用：讓容器使用 NVIDIA GPU
 ├── compose.monitoring.yaml  # 選用：Prometheus 和 Grafana，監控閘道
 ├── monitoring/        # Prometheus 設定、Grafana 資料來源和面板（JSON）

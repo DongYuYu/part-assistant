@@ -43,6 +43,21 @@ services:
         condition: service_healthy
     restart: "no"
 
+  gateway:  # inference gateway: keys, limits, metering (design/gateway.md)
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    image: part-assistant-gateway:local
+    ports:
+      - "127.0.0.1:8100:8100"  # this machine only; Prometheus scrapes it here
+    env_file:  # the real ANTHROPIC_API_KEY lives only here
+      - path: .env
+        required: false
+    environment:
+      PART_ASSISTANT_UPSTREAM_LOCAL: http://ollama:11434/v1
+    volumes:
+      - gateway:/data  # keys (hashed) and usage
+
   prepare:  # data + retrieval models, then exits
     <<: *app
     command: ["prepare"]
@@ -70,6 +85,7 @@ services:
         condition: service_healthy
 
 volumes:
+  gateway:
   raw:
   processed:
   traces:
