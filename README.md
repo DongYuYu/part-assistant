@@ -342,6 +342,8 @@ part-assistant/
 ├── Dockerfile         # 映像檔：只有 Python、鎖定的套件和程式碼，資料放 volume
 ├── compose.yaml       # docker compose：prepare、app、ollama
 ├── compose.gpu.yaml   # 選用：讓容器使用 NVIDIA GPU
+├── compose.monitoring.yaml  # 選用：Prometheus，抓閘道的 /metrics
+├── monitoring/        # Prometheus 設定
 ├── docker/entrypoint.sh  # 容器的指令：prepare / ask / mcp / eval
 ├── .mcp.json          # Claude Code 的 MCP 設定
 └── tests/             # pytest

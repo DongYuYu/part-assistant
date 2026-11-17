@@ -332,3 +332,12 @@ def test_metrics_page_is_prometheus_text(setup):
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
     assert "# TYPE gateway_requests_total counter" in r.text
     assert 'gateway_request_duration_seconds_bucket{le="0.25",route="claude"}' in r.text
+
+
+def test_known_series_start_at_zero_so_the_first_error_is_not_lost(setup):
+    """increase() needs a sample before the first error; a series born at 1 counts as 0."""
+    client, gw, _, _, _, _ = setup
+    page = client.get("/metrics").text
+    assert 'gateway_rejections_total{reason="auth",route="claude"} 0.0' in page
+    assert 'gateway_rejections_total{reason="quota",route="local"} 0.0' in page
+    assert 'gateway_in_flight_requests{route="local"} 0.0' in page

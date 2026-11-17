@@ -176,6 +176,8 @@ class SSEUsage:
 # LLM calls take seconds, not milliseconds: the default buckets (5 ms .. 10 s) would put
 # most calls in the last one.
 DURATION_BUCKETS = (0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120)
+ROUTES = ("claude", "local")
+REJECT_REASONS = ("auth", "rate", "quota", "model", "bad_request")
 # No extra *_created series (the time each series was created): not used in queries,
 # and it doubles the number of series.
 disable_created_metrics()
@@ -202,6 +204,14 @@ class Metrics:
                                   "never sent upstream", ["route", "reason"], registry=r)
         self.in_flight = Gauge("gateway_in_flight_requests", "Calls waiting for upstream",
                                ["route"], registry=r)
+        # Start every known series at 0. A series that first appears already at 3 has no
+        # earlier sample, so increase()/rate() count those first 3 as 0: the first errors,
+        # the ones an alert most needs, would be invisible.
+        for route in ROUTES:
+            self.in_flight.labels(route)
+            self.duration.labels(route)
+            for reason in REJECT_REASONS:
+                self.rejections.labels(route, reason)
 
 
 # --- the app

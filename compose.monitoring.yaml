@@ -1,0 +1,24 @@
+# Local monitoring for the gateway (Linux / WSL2 with Docker Engine):
+#
+#   uv run --env-file .env python -m part_assistant.gateway serve    # on the host, port 8100
+#   docker compose -f compose.monitoring.yaml up -d
+#   open http://localhost:9090  (Status > Targets: gateway should be UP)
+#
+# network_mode: host lets Prometheus reach the gateway on the host's 127.0.0.1, so the
+# gateway does not have to listen on every interface. Data is kept in a volume (7 days).
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    network_mode: host
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.listen-address=127.0.0.1:9090
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus:/prometheus
+
+volumes:
+  prometheus:

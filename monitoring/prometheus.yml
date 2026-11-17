@@ -1,0 +1,11 @@
+# What Prometheus scrapes, and how often. Used by compose.monitoring.yaml.
+global:
+  scrape_interval: 5s      # short for a demo; 15-60s is usual in production
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: gateway
+    # The gateway runs on the host (uv run ... gateway serve). Prometheus uses the
+    # host's network (network_mode: host), so 127.0.0.1 is the host here.
+    static_configs:
+      - targets: ["127.0.0.1:8100"]

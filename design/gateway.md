@@ -85,6 +85,36 @@ flowchart LR
 - **耗時的 bucket 是 0.25 到 120 秒**：預設的 bucket 是 5 毫秒到 10 秒，給網頁用的，LLM 呼叫大多會落在最後一格。
 - **不需要金鑰**：正式環境只讓監控網段連得到這個 port。
 
+### 用 Prometheus 抓指標
+
+```bash
+uv run --env-file .env python -m part_assistant.gateway serve      # 閘道在本機的 8100
+docker compose -f compose.monitoring.yaml up -d                     # Prometheus 每 5 秒抓一次
+# 瀏覽器開 http://localhost:9090 → Status → Targets：gateway 應該是 UP
+```
+
+- 設定檔是 `monitoring/prometheus.yml`。Prometheus 用主機的網路（`network_mode: host`），所以閘道只要聽 127.0.0.1，不用對外開放。
+- 映像檔鎖定 `prom/prometheus:v3.15.1`，資料保存 7 天。
+
+常用查詢（PromQL）：
+
+| 想知道 | 查詢 |
+|---|---|
+| 每秒請求數 | `sum(rate(gateway_requests_total[5m]))` |
+| 錯誤率（非 2xx） | `sum(rate(gateway_requests_total{status!~"2.."}[5m])) / sum(rate(gateway_requests_total[5m]))` |
+| P95 延遲 | `histogram_quantile(0.95, sum by (le) (rate(gateway_request_duration_seconds_bucket[5m])))` |
+| 平均延遲 | `sum(rate(gateway_request_duration_seconds_sum[5m])) / sum(rate(gateway_request_duration_seconds_count[5m]))` |
+| 每分鐘 token | `sum by (kind) (rate(gateway_tokens_total[5m])) * 60` |
+| 每小時花費 | `sum(rate(gateway_cost_usd_total[1h])) * 3600` |
+| 被擋下的原因 | `sum by (reason) (increase(gateway_rejections_total[10m]))` |
+| 閘道活著嗎 | `up{job="gateway"}` |
+
+**實測時踩到的三件事**（2026-11-17，Ollama qwen3:4b 經過閘道）：
+
+1. **第一次的錯誤不見了**：第一版只有在錯誤發生時才建立那條序列。Prometheus 第一次抓到時值已經是 3，沒有之前的值可以相減，`increase()` 就算成 0。改成啟動時先把已知的組合（route × reason）設為 0 之後，同樣送 3 次錯誤金鑰，就能查到 3.22。狀態碼和模型名稱無法事先列舉，所以 `requests_total` 的新序列還是有這個問題。告警可以改用 `requests_total` 加上 `rejections_total` 一起判斷，或者在 Grafana 的面板上看原始值。
+2. **`increase()` 不是整數**：3 次顯示成 3.22。因為 Prometheus 會把取樣到的區段等比例外推到整個時間範圍。看趨勢沒問題，但不要拿它來對帳；對帳用 SQLite 的用量表。
+3. **重啟不會讓數字變成負的**：閘道重啟後 counter 從 23 掉回 0。`rate()` 和 `increase()` 會把下降判斷為重啟，從 0 接著算。所以 counter 一定要用這兩個函數來看，不要直接拿原始值相減。
+
 ## 三、怎麼用
 
 ```bash
