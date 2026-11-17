@@ -132,7 +132,8 @@ flowchart TB
 - ✅ vLLM 跑 Qwen3 4B / 1.7B 的原始、FP8、INT4（AWQ）版本，比較記憶體、TTFT、tokens/s 和黃金樣本分數：8 GB 筆電 GPU 上選 4B INT4（115 tokens/s，4 人同時 436 tokens/s）；4B BF16 放不進，模型大小對分數的影響遠大於量化。地端 prompt 加一條「照抄搜尋結果的出處」後，4B INT4 從 20/48 進步到 33/48（[數字](design/local-llm.md)）
 - ✅ 推論閘道：app 的所有模型呼叫都經過它（Claude 原樣轉發，地端走 OpenAI 格式），app 不用改程式，只改環境變數。每人一把閘道金鑰（只存雜湊）、每分鐘請求數和每天 token 配額、只放行有價格的模型、每次呼叫記下 token 和成本（串流也算）（[說明](design/gateway.md)）
 - ⬜ 輸入端 PII 遮罩、輸出端 schema 驗證
-- ⬜ Prometheus 指標加 Grafana 面板
+- ✅ Prometheus 指標：閘道的 `/metrics` 提供請求數、錯誤、延遲分布、token、成本、被擋下的原因；不放使用者 label，避免時間序列爆量
+- ⬜ Grafana 面板
 - ⬜ 壓測，換算每千次請求的成本
 - ⬜（選做）Kubernetes manifest 範例
 

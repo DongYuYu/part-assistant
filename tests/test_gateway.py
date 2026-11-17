@@ -258,3 +258,77 @@ def test_local_agent_sends_the_gateway_key(monkeypatch):
     assert "Authorization" not in local_headers()
     monkeypatch.setenv("PART_ASSISTANT_LOCAL_API_KEY", "pa-abc")
     assert local_headers()["Authorization"] == "Bearer pa-abc"
+
+
+# --- Prometheus metrics
+
+def metric(gw, name, **labels):
+    return gw.metrics.registry.get_sample_value(name, labels) or 0
+
+
+def test_metrics_count_calls_tokens_cost_and_time(setup):
+    client, gw, _, _, key, _ = setup
+    ask_claude(client, key)
+    ask_claude(client, key)
+    claude = {"route": "claude", "model": "claude-opus-5-5"}
+    assert metric(gw, "gateway_requests_total", **claude, status="200") == 2
+    assert metric(gw, "gateway_tokens_total", **claude, kind="input") == 3000
+    assert metric(gw, "gateway_tokens_total", **claude, kind="output") == 400
+    assert metric(gw, "gateway_cost_usd_total", model="claude-opus-5-5") == pytest.approx(
+        2 * (1000 * 4 + 200 * 20 + 500 * 0.2) / 1e6)
+    assert metric(gw, "gateway_request_duration_seconds_count", route="claude") == 2
+    assert metric(gw, "gateway_in_flight_requests", route="claude") == 0  # all finished
+
+
+def test_rejections_are_counted_by_reason_and_never_reach_upstream_counts(setup):
+    client, gw, _, conn, _, _ = setup
+    client.post("/v1/messages", json={}, headers={"x-api-key": "pa-wrong"})
+    key = add_key(conn, "bob", rpm=1)
+    ask_claude(client, key)
+    ask_claude(client, key)
+    ask_claude(client, add_key(conn, "dave"), model="claude-unknown")
+    for reason, n in [("auth", 1), ("rate", 1), ("model", 1), ("quota", 0)]:
+        assert metric(gw, "gateway_rejections_total", route="claude", reason=reason) == n
+    assert metric(gw, "gateway_requests_total", route="claude", model="claude-opus-5-5",
+                  status="200") == 1
+
+
+def test_failed_calls_do_not_turn_any_model_name_into_a_label(setup):
+    """Cardinality: a random model name from the app must not create a new series."""
+    client, gw, up, _, key, _ = setup
+    up.reply = lambda request: httpx2.Response(404, json={"error": "model not found"})
+    for name in ("x1", "x2", "x3"):
+        client.post("/v1/chat/completions", json={"model": name, "messages": []},
+                    headers={"Authorization": f"Bearer {key}"})
+    assert metric(gw, "gateway_requests_total", route="local", model="-", status="404") == 3
+    page = client.get("/metrics").text
+    assert 'model="x1"' not in page
+
+
+def test_streamed_call_leaves_in_flight_only_after_the_stream_ends(setup):
+    client, gw, up, _, key, _ = setup
+    up.reply = lambda request: httpx2.Response(200, stream=Chunks(CLAUDE_STREAM))
+    ask_claude(client, key, stream=True)
+    assert metric(gw, "gateway_in_flight_requests", route="claude") == 0
+    assert metric(gw, "gateway_tokens_total", route="claude", model="claude-opus-5-5",
+                  kind="output") == 50
+
+
+def test_upstream_down_is_counted_as_502(setup):
+    client, gw, up, _, key, _ = setup
+
+    def refuse(request):
+        raise httpx2.ConnectError("refused", request=request)
+    up.reply = refuse
+    ask_claude(client, key)
+    assert metric(gw, "gateway_requests_total", route="claude", model="-", status="502") == 1
+    assert metric(gw, "gateway_in_flight_requests", route="claude") == 0
+
+
+def test_metrics_page_is_prometheus_text(setup):
+    client, _, _, _, key, _ = setup
+    ask_claude(client, key)
+    r = client.get("/metrics")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+    assert "# TYPE gateway_requests_total counter" in r.text
+    assert 'gateway_request_duration_seconds_bucket{le="0.25",route="claude"}' in r.text

@@ -67,6 +67,24 @@ flowchart LR
 - app 中途斷線的話，已經產生的部分照樣記帳。
 - Claude 的成本照價格表算，包含快取讀寫。地端記成 0（GPU 是固定成本，見下面的 Q&A）。
 
+### 監控指標（`GET /metrics`）
+
+給 Prometheus 定期來抓（pull）。依 RED 方法（Rate 請求數、Errors 錯誤、Duration 耗時），再加上 token 和成本：
+
+| 指標 | 類型 | label | 回答什麼問題 |
+|---|---|---|---|
+| `gateway_requests_total` | Counter | route, model, status | 每秒多少請求？錯誤率多少？ |
+| `gateway_request_duration_seconds` | Histogram | route | P95 延遲多少？ |
+| `gateway_tokens_total` | Counter | route, model, kind（input / output） | 每分鐘用多少 token？ |
+| `gateway_cost_usd_total` | Counter | model | 每小時花多少錢？ |
+| `gateway_rejections_total` | Counter | route, reason（auth / rate / quota / model / bad_request） | 閘道擋下多少？為什麼？ |
+| `gateway_in_flight_requests` | Gauge | route | 現在有幾個請求在等模型回答？ |
+
+- **沒有 user label**：每一種 label 組合都是一條時間序列，使用者有 1 萬個就是 1 萬倍。每人的用量看 SQLite 的 `gateway_usage`。
+- **地端的 model 名稱只有成功時才當 label**：名稱是 app 填的，失敗時一律記成 `-`，否則亂填名稱就能一直製造新序列。
+- **耗時的 bucket 是 0.25 到 120 秒**：預設的 bucket 是 5 毫秒到 10 秒，給網頁用的，LLM 呼叫大多會落在最後一格。
+- **不需要金鑰**：正式環境只讓監控網段連得到這個 port。
+
 ## 三、怎麼用
 
 ```bash
@@ -123,7 +141,7 @@ uv run python -m part_assistant.gateway revoke alice
 - **配額用完時 agent 還是會試著降級**：429 對 agent 來說就是「Claude 暫時不能用」，所以會改走地端，而地端也經過同一個閘道，同樣被拒。結果正確（不會多花錢），只是多一次呼叫，錯誤訊息也不夠清楚。之後可以讓 agent 分辨「配額用完」和「Claude 忙」。
 - **身分**：閘道金鑰是一人一把，但還不是 SSO。正式系統要由 SSO 換發短效 token。
 - 還沒做的（第二階段後面幾步）：
-  - Prometheus 指標和 Grafana 面板（請求數、延遲、token、錯誤率，依使用者和模型分）
+  - Grafana 面板和告警規則（指標已經有了，見上面）
   - 輸入端的 PII 遮罩、輸出端的 schema 驗證
   - 用 k6 或 locust 壓測，換算每千次請求的成本（包括地端 GPU 攤提）
 

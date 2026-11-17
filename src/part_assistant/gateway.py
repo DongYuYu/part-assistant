@@ -8,6 +8,7 @@ Routes
     POST /v1/messages          Anthropic format: passed to Claude unchanged
     POST /v1/chat/completions  OpenAI format: passed to the local server (vLLM or Ollama)
     GET  /healthz
+    GET  /metrics              Prometheus (see design/gateway.md); no user labels on purpose
 
 What it adds to every call, the same for every app and every model:
   - who:      a gateway key per user (only its sha256 is stored). The real
@@ -44,6 +45,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx2
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    disable_created_metrics,
+    generate_latest,
+)
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -161,6 +171,39 @@ class SSEUsage:
                 self.usage.update({k: v for k, v in found.items() if v is not None})
 
 
+# --- Prometheus metrics
+
+# LLM calls take seconds, not milliseconds: the default buckets (5 ms .. 10 s) would put
+# most calls in the last one.
+DURATION_BUCKETS = (0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120)
+# No extra *_created series (the time each series was created): not used in queries,
+# and it doubles the number of series.
+disable_created_metrics()
+
+
+class Metrics:
+    """What Prometheus scrapes from /metrics. Labels are kept few and bounded: every label
+    combination is a separate time series. Per-user numbers live in gateway_usage
+    (SQLite), not here: 10,000 users as a label would be 10,000 times the series."""
+
+    def __init__(self) -> None:
+        self.registry = CollectorRegistry()  # one per Gateway: tests do not share counts
+        r = self.registry
+        self.requests = Counter("gateway_requests", "Calls sent upstream, by result",
+                                ["route", "model", "status"], registry=r)
+        self.duration = Histogram("gateway_request_duration_seconds",
+                                  "Time from request to the last byte of the answer",
+                                  ["route"], buckets=DURATION_BUCKETS, registry=r)
+        self.tokens = Counter("gateway_tokens", "Tokens, from the upstream's usage",
+                              ["route", "model", "kind"], registry=r)
+        self.cost = Counter("gateway_cost_usd", "Claude list price of the calls",
+                            ["model"], registry=r)
+        self.rejections = Counter("gateway_rejections", "Refused by the gateway itself, "
+                                  "never sent upstream", ["route", "reason"], registry=r)
+        self.in_flight = Gauge("gateway_in_flight_requests", "Calls waiting for upstream",
+                               ["route"], registry=r)
+
+
 # --- the app
 
 class Gateway:
@@ -177,6 +220,7 @@ class Gateway:
             "PART_ASSISTANT_UPSTREAM_LOCAL", "http://127.0.0.1:11434/v1")).rstrip("/")
         self.clock = clock
         self.recent: dict[str, deque[float]] = defaultdict(deque)  # user -> request times
+        self.metrics = Metrics()
 
     # --- checks, in order: who, how often, how much
 
@@ -214,6 +258,22 @@ class Gateway:
                 "output_tokens, cost_usd, ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (_now(), user_id, route, model, status, tokens[0], tokens[1], cost,
                  round((time.perf_counter() - t0) * 1000)))
+        m = self.metrics
+        m.in_flight.labels(route).dec()  # every upstream call ends here, exactly once
+        # The app picks the local model name: only a name the server accepted becomes a
+        # label, or anyone could create new time series by sending random names.
+        label = str(model) if status < 400 else "-"
+        m.requests.labels(route, label, str(status)).inc()
+        m.duration.labels(route).observe(time.perf_counter() - t0)
+        m.tokens.labels(route, label, "input").inc(tokens[0])
+        m.tokens.labels(route, label, "output").inc(tokens[1])
+        if cost:
+            m.cost.labels(label).inc(cost)
+
+    def _reject(self, route: str, reason: str, status: int, kind: str, message: str,
+                **kw) -> JSONResponse:
+        self.metrics.rejections.labels(route, reason).inc()
+        return error(route, status, kind, message, **kw)
 
     # --- routes
 
@@ -226,32 +286,40 @@ class Gateway:
     async def healthz(self, request: Request) -> Response:
         return JSONResponse({"ok": True})
 
+    async def metrics_page(self, request: Request) -> Response:
+        # No key needed: in production only the monitoring network can reach this port.
+        return Response(generate_latest(self.metrics.registry),
+                        headers={"content-type": CONTENT_TYPE_LATEST})
+
     async def _proxy(self, request: Request, route: str) -> Response:
         t0 = time.perf_counter()
         user = self._who(request)
         if user is None:
-            return error(route, 401, "authentication_error", "missing or unknown gateway key")
+            return self._reject(route, "auth", 401, "authentication_error",
+                                "missing or unknown gateway key")
         if self._over_rate(user):
-            return error(route, 429, "rate_limit_error",
-                         f"over {user['rpm']} requests per minute", retry_after=60)
+            return self._reject(route, "rate", 429, "rate_limit_error",
+                                f"over {user['rpm']} requests per minute", retry_after=60)
         if self.tokens_today(user["user_id"]) >= user["daily_tokens"]:
             # No point retrying in seconds: tell the SDK not to (it honors x-should-retry).
-            return error(route, 429, "rate_limit_error",
-                         f"daily token quota used ({user['daily_tokens']})", retry_after=3600,
-                         retry=False)
+            return self._reject(route, "quota", 429, "rate_limit_error",
+                                f"daily token quota used ({user['daily_tokens']})",
+                                retry_after=3600, retry=False)
         try:
             body = json.loads(await request.body())
         except json.JSONDecodeError:
-            return error(route, 400, "invalid_request_error", "body is not JSON")
+            return self._reject(route, "bad_request", 400, "invalid_request_error",
+                                "body is not JSON")
         if not isinstance(body, dict):
-            return error(route, 400, "invalid_request_error", "body is not a JSON object")
+            return self._reject(route, "bad_request", 400, "invalid_request_error",
+                                "body is not a JSON object")
         model = body.get("model")
         stream = bool(body.get("stream"))
 
         if route == "claude":
             if model not in PRICES:  # only models someone approved, with a known price
-                return error(route, 400, "invalid_request_error",
-                             f"model {model!r} is not allowed by the gateway")
+                return self._reject(route, "model", 400, "invalid_request_error",
+                                    f"model {model!r} is not allowed by the gateway")
             url = f"{self.upstream_anthropic}/v1/messages"
             headers = {h: request.headers[h] for h in FORWARD_TO_CLAUDE if h in request.headers}
             headers["x-api-key"] = self.anthropic_key
@@ -265,6 +333,7 @@ class Gateway:
 
         upstream = self.client.build_request("POST", url, params=request.url.query,
                                              headers=headers, content=content)
+        self.metrics.in_flight.labels(route).inc()  # back down in _record
         try:
             r = await self.client.send(upstream, stream=stream)
         except httpx2.TimeoutException:
@@ -308,6 +377,7 @@ class Gateway:
             Route("/v1/messages", self.messages, methods=["POST"]),
             Route("/v1/chat/completions", self.chat_completions, methods=["POST"]),
             Route("/healthz", self.healthz, methods=["GET"]),
+            Route("/metrics", self.metrics_page, methods=["GET"]),
         ])
 
 
